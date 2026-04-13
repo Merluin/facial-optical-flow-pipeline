@@ -1,0 +1,13 @@
+name: face_of
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - scipy
+  - pip
+  - pip:
+    - opencv-python
+    - numpy
+    - imageio[ffmpeg]
+    - pillow

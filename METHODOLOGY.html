@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facial Expression Optical Flow Pipeline - Methodology</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        header {
+            text-align: center;
+            margin-bottom: 60px;
+            border-bottom: 3px solid #2c3e50;
+            padding-bottom: 30px;
+        }
+        h1 {
+            font-size: 2.5em;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            font-size: 1.2em;
+            color: #7f8c8d;
+            font-style: italic;
+        }
+        h2 {
+            font-size: 1.8em;
+            color: #2c3e50;
+            margin-top: 50px;
+            margin-bottom: 20px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        h3 {
+            font-size: 1.3em;
+            color: #34495e;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        .step {
+            background: #ecf0f1;
+            border-left: 4px solid #3498db;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .step-number {
+            display: inline-block;
+            background: #3498db;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 40px;
+            font-weight: bold;
+            margin-right: 15px;
+            font-size: 1.2em;
+        }
+        .step-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #2c3e50;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        code {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9em;
+        }
+        pre {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            border-radius: 4px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+        .formula {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+            font-family: 'Monaco', monospace;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            border: 1px solid #bdc3c7;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #bdc3c7;
+        }
+        th {
+            background: #34495e;
+            color: white;
+            font-weight: bold;
+        }
+        tr:hover {
+            background: #f5f5f5;
+        }
+        .highlight {
+            background: #fff3cd;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .diagram {
+            background: #ecf0f1;
+            border: 2px solid #95a5a6;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+            font-family: monospace;
+            overflow-x: auto;
+            font-size: 0.95em;
+            line-height: 1.4;
+        }
+        .note {
+            background: #d5f4e6;
+            border-left: 4px solid #27ae60;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .warning {
+            background: #fadbd8;
+            border-left: 4px solid #e74c3c;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .toc {
+            background: #ecf0f1;
+            padding: 20px;
+            border-radius: 4px;
+            margin: 30px 0;
+        }
+        .toc h3 {
+            margin-top: 0;
+        }
+        .toc ul {
+            list-style: none;
+            padding: 0;
+        }
+        .toc li {
+            margin: 8px 0;
+            padding-left: 20px;
+        }
+        .toc a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding-top: 20px;
+            border-top: 1px solid #bdc3c7;
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+        .parameter {
+            background: #ecf0f1;
+            padding: 10px 15px;
+            margin: 5px 0;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Facial Expression Optical Flow Pipeline</h1>
+            <p class="subtitle">A Comprehensive Methodology for Analyzing Facial Expression Motion in Video</p>
+            <p style="margin-top: 20px; color: #7f8c8d;">ORIS Vector Project | April 2026</p>
+        </header>
+
+        <div class="toc">
+            <h3>📋 Table of Contents</h3>
+            <ul>
+                <li><a href="#overview">Overview & Goals</a></li>
+                <li><a href="#architecture">Pipeline Architecture</a></li>
+                <li><a href="#step1">Step 1: Video Loading</a></li>
+                <li><a href="#step2">Step 2: Face Detection</a></li>
+                <li><a href="#step3">Step 3: Face Standardization</a></li>
+                <li><a href="#step4">Step 4: Bbox Smoothing & Affine Registration</a></li>
+                <li><a href="#step5">Step 5: Apex Detection</a></li>
+                <li><a href="#step6">Step 6: Asymmetric Segmentation</a></li>
+                <li><a href="#step7">Step 7: Face Masking</a></li>
+                <li><a href="#step8">Step 8: Dense Optical Flow</a></li>
+                <li><a href="#step9">Step 9: Output & Visualization</a></li>
+                <li><a href="#parameters">Configuration Parameters</a></li>
+                <li><a href="#output-format">Output File Format</a></li>
+                <li><a href="#references">References</a></li>
+            </ul>
+        </div>
+
+        <h2 id="overview">Overview & Goals</h2>
+        <p>
+            This pipeline processes videos of facial expressions to extract <span class="highlight">optical flow vectors</span>
+            that capture the motion and deformation of facial muscles during emotional expression. The primary goals are:
+        </p>
+        <ul style="margin: 15px 0 15px 30px;">
+            <li><strong>Face Standardization</strong>: Align all faces to a canonical reference frame (center, size, rotation)</li>
+            <li><strong>Expression Apex Detection</strong>: Identify the frame of maximum emotional intensity using motion cues</li>
+            <li><strong>Temporal Segmentation</strong>: Extract a focused window around the apex (onset → peak → decay)</li>
+            <li><strong>Motion Quantification</strong>: Compute dense optical flow to measure pixel-level facial deformation</li>
+            <li><strong>Data Export</strong>: Save flow vectors in compact format (NPZ) with visualization (GIF)</li>
+        </ul>
+
+        <h2 id="architecture">Pipeline Architecture</h2>
+        <div class="diagram">
+Video File
+    ↓ (Load frames)
+Frame Sequence (N frames)
+    ↓ (Detect face)
+Face Bounding Boxes (per frame)
+    ↓ (Smooth boxes)
+Smoothed Bboxes (temporal stability)
+    ↓ (Align & crop)
+Standardized Face Frames (256×256, centered)
+    ↓ (Register to frame 0)
+Registered Face Frames (rigid motion removed)
+    ↓ (Compute motion)
+Motion Signal (per-frame magnitude)
+    ↓ (Find apex)
+Apex Frame Index
+    ↓ (Segment: apex-40 to apex+5)
+Segmented Frames (45 frames total)
+    ↓ (Apply mask, compute OF)
+Optical Flow Arrays (44 flow maps)
+    ↓
+    ├→ NPZ File (flow + metadata)
+    └→ GIF Animation (visualization)
+        </div>
+
+        <h2 id="step1">Step 1: Video Loading & Frame Extraction</h2>
+        <div class="step">
+            <div><span class="step-number">1</span><span class="step-title">Load Video Frames</span></div>
+            <p style="margin-top: 15px;">
+                Read all frames from the video file using OpenCV's <code>cv2.VideoCapture</code>.
+            </p>
+            <h3>Process:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li>Open video file with <code>cv2.VideoCapture(video_path)</code></li>
+                <li>Extract FPS from video metadata</li>
+                <li>Read all frames sequentially into memory (BGR format)</li>
+                <li>Release video file handle</li>
+            </ul>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>frames_raw</strong>: List of N numpy arrays, each shape (H, W, 3), dtype uint8</li>
+                <li><strong>fps</strong>: Frames per second (float)</li>
+            </ul>
+        </div>
+
+        <h2 id="step2">Step 2: Face Detection with Haar Cascades</h2>
+        <div class="step">
+            <div><span class="step-number">2</span><span class="step-title">Detect Faces Frame-by-Frame</span></div>
+            <p style="margin-top: 15px;">
+                Use OpenCV's pre-trained Haar cascade classifier to detect frontal faces in each frame.
+            </p>
+            <h3>Algorithm:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li>Convert each frame to grayscale</li>
+                <li>Run <code>cascadeClassifier.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50,50))</code></li>
+                <li>If multiple faces detected, select the largest by area</li>
+                <li>If no face detected, carry forward the previous frame's bbox (temporal continuity)</li>
+            </ul>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>bboxes</strong>: List of (x, y, w, h) tuples, one per frame</li>
+                <li><code>x, y</code>: Top-left corner of bounding box</li>
+                <li><code>w, h</code>: Width and height of box</li>
+            </ul>
+            <div class="warning">
+                <strong>⚠️ Limitation:</strong> Haar cascades work best on frontal faces with good lighting.
+                Profile views or extreme angles may fail. Use <code>PAD_FACTOR</code> to adjust detection sensitivity.
+            </div>
+        </div>
+
+        <h2 id="step3">Step 3: Face Standardization (Alignment & Cropping)</h2>
+        <div class="step">
+            <div><span class="step-number">3</span><span class="step-title">Standardize Face Position & Size</span></div>
+            <p style="margin-top: 15px;">
+                Transform each face to a canonical reference: centered, aligned, and cropped to a fixed square size.
+            </p>
+            <h3>Process for Each Frame:</h3>
+            <h4>A) Eye Detection & Rotation Alignment</h4>
+            <div class="formula">
+left_eye = (x + 0.25w, y + 0.35h)
+right_eye = (x + 0.75w, y + 0.35h)
+angle = atan2(right_eye.y - left_eye.y, right_eye.x - left_eye.x) × 180/π
+            </div>
+            <p>
+                Estimate eye positions from the bbox geometry. Compute the angle between eyes.
+                Rotate the frame so the eyes are perfectly horizontal (angle = 0°).
+            </p>
+            <h4>B) Padded Bounding Box</h4>
+            <div class="formula">
+bbox_rotated = rotate_points(bbox, angle, frame_center)
+padding = PAD_FACTOR × max(width, height)
+bbox_padded = bbox_rotated + padding (all sides)
+            </div>
+            <p>
+                After rotation, recompute the bbox in rotated space. Add symmetric padding
+                (default <code>PAD_FACTOR=0.1</code>) to include neck, some hair. Adjust for better face isolation.
+            </p>
+            <h4>C) Square Crop</h4>
+            <div class="formula">
+side = max(bbox_padded.width, bbox_padded.height)
+x1 = center_x - side/2
+y1 = center_y - side/2
+crop_region = frame[y1:y1+side, x1:x1+side]
+            </div>
+            <p>
+                Force a square crop (important for symmetric optical flow). Center the crop and ensure it stays within image bounds.
+            </p>
+            <h4>D) Resize</h4>
+            <div class="formula">
+output = cv2.resize(crop_region, (CROP_SIZE, CROP_SIZE))
+            </div>
+            <p>
+                Resize the cropped region to a fixed size (default <code>256×256</code>). Use bilinear interpolation.
+            </p>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>std_frames</strong>: List of N arrays, each shape (256, 256, 3), dtype uint8, BGR</li>
+                <li>All faces centered, rotation-aligned, same size</li>
+            </ul>
+            <div class="note">
+                <strong>💡 Tip:</strong> If you see shoulders/hair in the OF visualization, reduce <code>PAD_FACTOR</code>
+                to crop tighter. If the face is cut off, increase it.
+            </div>
+        </div>
+
+        <h2 id="step4">Step 4: Bounding Box Smoothing & Affine Registration</h2>
+        <div class="step">
+            <div><span class="step-number">4</span><span class="step-title">Stabilize Face Tracking & Remove Rigid Motion</span></div>
+            <p style="margin-top: 15px;">
+                Two-stage stabilization to reduce jitter and remove head rotation/translation.
+            </p>
+            <h3>Stage A: Temporal Smoothing of Bounding Boxes</h3>
+            <p>Face detection can "jitter" (bbox shifts slightly between frames). Apply median filter:</p>
+            <div class="formula">
+smoothed_bbox[i] = median_filter(bbox[i-k:i+k])  for each component (x, y, w, h)
+kernel_size = 5 (recommended)
+            </div>
+            <p>
+                Uses <code>scipy.ndimage.median_filter</code> on each bbox component across time.
+                Reduces detection noise while preserving fast changes.
+            </p>
+            <h3>Stage B: Affine Registration to Reference Frame</h3>
+            <p>
+                Even with frame-by-frame alignment, head rotation/translation still appears in standardized frames.
+                Solve this by warping each frame to align its facial keypoints with frame 0's keypoints.
+            </p>
+            <h4>Step 1: Estimate Facial Keypoints</h4>
+            <div class="formula">
+left_eye_point = (x + 0.25w, y + 0.35h)
+right_eye_point = (x + 0.75w, y + 0.35h)
+nose_point = (x + 0.50w, y + 0.55h)
+            </div>
+            <p>Estimate 3 facial keypoints from the bbox (eyes and nose center).</p>
+            <h4>Step 2: Compute Affine Transform</h4>
+            <div class="formula">
+M = cv2.getAffineTransform(current_keypoints, reference_keypoints)
+where M is a 2×3 affine matrix
+            </div>
+            <p>
+                For each frame, compute the affine transformation that aligns its keypoints
+                to the reference frame's keypoints.
+            </p>
+            <h4>Step 3: Warp & Crop</h4>
+            <div class="formula">
+warped = cv2.warpAffine(frame, M, (W, H))
+crop_region = warped[y_ref:y_ref+side, x_ref:x_ref+side]
+output = cv2.resize(crop_region, (256, 256))
+            </div>
+            <p>
+                Apply the affine warp to the entire frame, then crop using the reference frame's crop region.
+                This removes all rigid motion (rotation + translation) relative to frame 0.
+            </p>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>std_frames</strong> (updated): Registered standardized frames, ready for OF</li>
+                <li>Much cleaner for optical flow: only facial deformation remains, not head motion</li>
+            </ul>
+        </div>
+
+        <h2 id="step5">Step 5: Apex Detection (Peak Expression Frame)</h2>
+        <div class="step">
+            <div><span class="step-number">5</span><span class="step-title">Find the Frame of Maximum Expression Intensity</span></div>
+            <p style="margin-top: 15px;">
+                Detect which frame represents the peak ("apex") of the facial expression.
+            </p>
+            <h3>Algorithm: Optical Flow-Based Motion Detection</h3>
+            <p>
+                For each frame <em>i</em>, compute the optical flow from frame 0 (neutral reference) to frame <em>i</em>.
+                The apex is the frame with maximum total motion magnitude.
+            </p>
+            <div class="formula">
+FOR each frame i in 1..N-1:
+    flow_i = calcOpticalFlowFarneback(gray_frame_0, gray_frame_i)
+    motion[i] = sum of ||flow_i|| per pixel
+
+apex_global = argmax(motion[1..N])
+            </div>
+            <h3>Rationale:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li>During expression buildup (onset), pixels move gradually</li>
+                <li>At peak (apex), facial deformation is maximum, so motion is maximum</li>
+                <li>During recovery (offset), motion decreases</li>
+                <li>Thus, <code>argmax(motion)</code> locates the apex</li>
+            </ul>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>apex_global</strong>: Frame index (0-based) in the full video</li>
+                <li><strong>motion</strong>: Array of motion magnitudes for all N frames</li>
+            </ul>
+            <div class="note">
+                <strong>💡 Tip:</strong> Plot <code>motion</code> to visualize the expression arc.
+                You should see a peak near the middle-to-end of the video.
+            </div>
+        </div>
+
+        <h2 id="step6">Step 6: Asymmetric Segmentation Around Apex</h2>
+        <div class="step">
+            <div><span class="step-number">6</span><span class="step-title">Extract Video Segment: Onset → Apex → Offset</span></div>
+            <p style="margin-top: 15px;">
+                Extract a focused window around the apex that captures the full expression arc.
+            </p>
+            <h3>Configuration:</h3>
+            <div class="parameter">
+APEX_WINDOW_BEFORE = 40  # frames before apex
+APEX_WINDOW_AFTER = 5    # frames after apex
+            </div>
+            <h3>Computation:</h3>
+            <div class="formula">
+seg_start = max(0, apex_global - APEX_WINDOW_BEFORE)
+seg_end = min(N_frames, apex_global + APEX_WINDOW_AFTER + 1)
+T = seg_end - seg_start  # total frames in segment
+apex_local = apex_global - seg_start  # apex index within segment
+
+seg_frames = std_frames[seg_start : seg_end]
+            </div>
+            <h3>Interpretation:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>40 frames before apex</strong>: Captures slow onset (expression buildup)</li>
+                <li><strong>5 frames after apex</strong>: Captures early recovery (decay)</li>
+                <li><strong>Total: ~45 frames</strong> at 25 fps ≈ 1.8 seconds</li>
+                <li>Apex appears near the end (frame 40 of 45) → most information is onset/buildup</li>
+            </ul>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>seg_frames</strong>: T standardized frames</li>
+                <li><strong>seg_start, seg_end, apex_local</strong>: Metadata for output</li>
+                <li>This segment is the focus for optical flow computation</li>
+            </ul>
+            <div class="note">
+                <strong>💡 Asymmetric Window Rationale:</strong> Expressions typically have faster onset than offset.
+                By including more frames before apex, we capture the slow buildup phase in detail.
+            </div>
+        </div>
+
+        <h2 id="step7">Step 7: Face Masking (Optional)</h2>
+        <div class="step">
+            <div><span class="step-number">7</span><span class="step-title">Isolate Facial Motion (Optional)</span></div>
+            <p style="margin-top: 15px;">
+                Optionally create a circular mask to isolate optical flow computation to the face region only,
+                excluding shoulders, neck, and background.
+            </p>
+            <h3>Configuration:</h3>
+            <div class="parameter">
+USE_FACE_MASK = True
+FACE_MASK_SIZE = 0.85  # 85% of frame size (0.0-1.0)
+            </div>
+            <h3>Mask Generation:</h3>
+            <div class="formula">
+center = (CROP_SIZE/2, CROP_SIZE/2)
+radius = (min(CROP_SIZE, CROP_SIZE) / 2) × FACE_MASK_SIZE
+mask = cv2.circle(zeros(CROP_SIZE, CROP_SIZE), center, radius, 255, -1)
+            </div>
+            <p>
+                Create a binary circular mask (0 outside, 255 inside) at the center of the 256×256 crop.
+                Radius is <code>FACE_MASK_SIZE</code> fraction of the frame size.
+            </p>
+            <h3>Application to Optical Flow:</h3>
+            <div class="formula">
+gray_masked = cv2.bitwise_and(gray_frame, gray_frame, mask=mask)
+flow = calcOpticalFlowFarneback(gray_masked_prev, gray_masked_curr, ...)
+            </div>
+            <p>
+                Apply the mask to grayscale frames before optical flow computation.
+                Masked-out regions become black (0 intensity), so no flow is computed there.
+            </p>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li>Flow vectors are computed only within the mask region</li>
+                <li>Visualization shows an orange circle marking the mask boundary</li>
+            </ul>
+            <h3>Adjustment:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><code>FACE_MASK_SIZE = 0.9</code>: Larger, includes more jaw/cheeks</li>
+                <li><code>FACE_MASK_SIZE = 0.85</code>: Balanced (default)</li>
+                <li><code>FACE_MASK_SIZE = 0.7</code>: Tight, only central face</li>
+            </ul>
+            <div class="note">
+                <strong>💡 Tip:</strong> Disable masking (<code>USE_FACE_MASK = False</code>) if you want to see
+                full-frame motion. Use masking to isolate facial deformation.
+            </div>
+        </div>
+
+        <h2 id="step8">Step 8: Dense Optical Flow (Farneback Algorithm)</h2>
+        <div class="step">
+            <div><span class="step-number">8</span><span class="step-title">Compute Dense Optical Flow</span></div>
+            <p style="margin-top: 15px;">
+                Compute dense optical flow on consecutive frames within the segment.
+                Optical flow estimates the motion vector at every pixel.
+            </p>
+            <h3>Algorithm: Farneback</h3>
+            <p>
+                OpenCV's <code>calcOpticalFlowFarneback</code> computes dense optical flow using
+                polynomial expansion approximation (Farneback 2003).
+            </p>
+            <h3>Computation:</h3>
+            <div class="formula">
+FOR each consecutive frame pair (i, i+1) in segment:
+    prev_gray = cvtColor(seg_frames[i], BGR2GRAY)
+    curr_gray = cvtColor(seg_frames[i+1], BGR2GRAY)
+
+    IF USE_FACE_MASK:
+        prev_gray = bitwise_and(prev_gray, prev_gray, mask=mask)
+        curr_gray = bitwise_and(curr_gray, curr_gray, mask=mask)
+
+    flow = calcOpticalFlowFarneback(
+        prev_gray, curr_gray, None,
+        pyr_scale=0.5,      # pyramid scale
+        levels=3,           # pyramid levels
+        winsize=15,         # averaging window
+        iterations=3,       # iterations per level
+        poly_n=5,          # polynomial size
+        poly_sigma=1.2,    # Gaussian std
+        flags=0
+    )
+
+    flows.append(flow)  # shape (256, 256, 2)
+            </div>
+            <h3>Output Shape:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li>Each flow: (H, W, 2) = (256, 256, 2)</li>
+                <li>flow[y, x, 0] = horizontal motion (dx)</li>
+                <li>flow[y, x, 1] = vertical motion (dy)</li>
+                <li>Total T-1 flow arrays for T-frame segment</li>
+            </ul>
+            <h3>Interpretation:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>Magnitude</strong>: <code>√(dx² + dy²)</code> = motion speed (pixels/frame)</li>
+                <li><strong>Direction</strong>: <code>atan2(dy, dx)</code> = motion angle</li>
+                <li><strong>Zero flow</strong>: Static regions (no motion)</li>
+                <li><strong>Large flow</strong>: Fast deformation (mouth, eyebrows, cheeks)</li>
+            </ul>
+            <div class="note">
+                <strong>💡 Parameters:</strong> These are tuned for 256×256 face crops at 25 fps.
+                Adjust <code>winsize</code> if flow appears too noisy or over-smoothed.
+            </div>
+        </div>
+
+        <h2 id="step9">Step 9: Output & Visualization</h2>
+        <div class="step">
+            <div><span class="step-number">9</span><span class="step-title">Save Data and Create Visualization</span></div>
+            <p style="margin-top: 15px;">
+                Save optical flow data to disk in two formats: (1) compact NPZ for analysis,
+                (2) animated GIF for visual inspection.
+            </p>
+            <h3>Output 1: NPZ File (Compressed NumPy Archive)</h3>
+            <div class="formula">
+np.savez_compressed(
+    "output/optical_flow_npz/DATASET_VIDEONAME.npz",
+    flow = stack(flows),              # (T-1, 256, 256, 2)
+    frames = stack(seg_frames),       # (T, 256, 256, 3)
+    apex_local = apex_local,
+    apex_global = apex_global,
+    seg_start = seg_start,
+    seg_end = seg_end,
+    fps = fps,
+    motion_all = motion_array,        # (N,)
+    face_mask_used = USE_FACE_MASK,
+    face_mask_size = FACE_MASK_SIZE
+)
+            </div>
+            <p>
+                Compact binary format, ~5-10 MB per video. Includes all flow data + metadata.
+                Load in Python: <code>data = np.load("file.npz"); flow = data["flow"]</code>
+            </p>
+            <h3>Output 2: GIF Animation (Visualization)</h3>
+            <p>For each flow frame, render a visual representation:</p>
+            <h4>A) Convert Flow to Color (HSV Colour Wheel)</h4>
+            <div class="formula">
+magnitude = sqrt(dx² + dy²)
+angle = atan2(dy, dx)  # -π .. π
+
+hue = (angle + π) / (2π) × 179     # direction → hue
+saturation = 255                    # always saturated
+value = magnitude / max_magnitude × 255  # speed → brightness
+
+hsv = stack([hue, saturation, value])
+color_map = cvtColor(hsv, HSV2BGR)
+            </div>
+            <p>
+                Red/yellow: rightward motion. Blue/cyan: leftward motion.
+                Bright: fast motion. Dark: slow motion.
+            </p>
+            <h4>B) Overlay Arrows</h4>
+            <div class="formula">
+FOR each (y, x) in grid(step=ARROW_STEP):
+    dx, dy = flow[y, x, :]
+    end_x = x + dx × ARROW_SCALE
+    end_y = y + dy × ARROW_SCALE
+    cv2.arrowedLine(frame, (x,y), (end_x,end_y), white, thickness=1)
+            </div>
+            <p>Draw white arrows on a regular grid (spacing = ARROW_STEP pixels) scaled by ARROW_SCALE.</p>
+            <h4>C) Draw Mask Circle (if enabled)</h4>
+            <div class="formula">
+cv2.circle(frame, center=(128,128), radius=int(256/2 × 0.85), color=orange, thickness=2)
+            </div>
+            <p>Orange circle shows the mask boundary.</p>
+            <h4>D) Annotate Frame</h4>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li>Frame counter (bottom-left): global frame index</li>
+                <li>"APEX" label: marks frames near apex</li>
+                <li>"MASK" label: if masking enabled</li>
+            </ul>
+            <h4>E) Create GIF</h4>
+            <div class="formula">
+imageio.mimsave(
+    "output/flow_visualization_gif/DATASET_VIDEONAME.gif",
+    gif_frames,
+    fps = fps × GIF_SPEED,
+    loop = 0  # infinite loop
+)
+            </div>
+            <p>
+                Export as animated GIF at reduced speed (default <code>GIF_SPEED=0.5</code>).
+                Open in browser or image viewer to inspect flow patterns.
+            </p>
+            <h3>File Naming Convention:</h3>
+            <div class="parameter">
+output/optical_flow_npz/ADFES_F01-Joy-Face Forward.npz
+output/flow_visualization_gif/ADFES_F01-Joy-Face Forward.gif
+            </div>
+            <p>Format: <code>&lt;DATASET&gt;_&lt;VIDEO_STEM&gt;.&lt;ext&gt;</code></p>
+        </div>
+
+        <h2 id="parameters">Configuration Parameters</h2>
+        <table>
+            <tr>
+                <th>Parameter</th>
+                <th>Default</th>
+                <th>Range</th>
+                <th>Description</th>
+            </tr>
+            <tr>
+                <td><code>CROP_SIZE</code></td>
+                <td>256</td>
+                <td>128-512</td>
+                <td>Output face square size (pixels)</td>
+            </tr>
+            <tr>
+                <td><code>PAD_FACTOR</code></td>
+                <td>0.1</td>
+                <td>0.0-0.5</td>
+                <td>Padding around face bbox. Lower = tighter crop (try 0.05-0.15 if shoulders appear in OF)</td>
+            </tr>
+            <tr>
+                <td><code>APEX_WINDOW_BEFORE</code></td>
+                <td>40</td>
+                <td>10-100</td>
+                <td>Frames before apex to include in segment</td>
+            </tr>
+            <tr>
+                <td><code>APEX_WINDOW_AFTER</code></td>
+                <td>5</td>
+                <td>0-50</td>
+                <td>Frames after apex to include in segment</td>
+            </tr>
+            <tr>
+                <td><code>USE_FACE_MASK</code></td>
+                <td>True</td>
+                <td>True/False</td>
+                <td>Enable circular mask for OF computation</td>
+            </tr>
+            <tr>
+                <td><code>FACE_MASK_SIZE</code></td>
+                <td>0.85</td>
+                <td>0.5-1.0</td>
+                <td>Mask radius as fraction of frame (0.85 = 85%)</td>
+            </tr>
+            <tr>
+                <td><code>ARROW_STEP</code></td>
+                <td>16</td>
+                <td>8-32</td>
+                <td>Spacing of arrow grid in GIF (pixels)</td>
+            </tr>
+            <tr>
+                <td><code>ARROW_SCALE</code></td>
+                <td>5.0</td>
+                <td>1.0-10.0</td>
+                <td>Arrow length multiplier (visual scale)</td>
+            </tr>
+            <tr>
+                <td><code>GIF_SPEED</code></td>
+                <td>0.5</td>
+                <td>0.25-1.0</td>
+                <td>GIF playback speed (fraction of real speed)</td>
+            </tr>
+            <tr>
+                <td><code>OF_PYR_SCALE</code></td>
+                <td>0.5</td>
+                <td>0.3-0.8</td>
+                <td>Farneback pyramid scale</td>
+            </tr>
+            <tr>
+                <td><code>OF_LEVELS</code></td>
+                <td>3</td>
+                <td>1-5</td>
+                <td>Farneback pyramid levels</td>
+            </tr>
+            <tr>
+                <td><code>OF_WINSIZE</code></td>
+                <td>15</td>
+                <td>5-31</td>
+                <td>Averaging window size (odd). Larger = smoother, slower.</td>
+            </tr>
+            <tr>
+                <td><code>OF_ITERATIONS</code></td>
+                <td>3</td>
+                <td>1-10</td>
+                <td>Iterations per pyramid level. Higher = more accurate, slower.</td>
+            </tr>
+        </table>
+
+        <h2 id="output-format">Output File Format</h2>
+        <h3>NPZ File Structure</h3>
+        <table>
+            <tr>
+                <th>Variable</th>
+                <th>Shape</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+            <tr>
+                <td><code>flow</code></td>
+                <td>(T-1, 256, 256, 2)</td>
+                <td>float32</td>
+                <td>Dense optical flow: [dx, dy] per pixel, T-1 frames</td>
+            </tr>
+            <tr>
+                <td><code>frames</code></td>
+                <td>(T, 256, 256, 3)</td>
+                <td>uint8</td>
+                <td>Standardized BGR face frames, T frames</td>
+            </tr>
+            <tr>
+                <td><code>apex_local</code></td>
+                <td>()</td>
+                <td>int32</td>
+                <td>Apex frame index within segment (0-based)</td>
+            </tr>
+            <tr>
+                <td><code>apex_global</code></td>
+                <td>()</td>
+                <td>int32</td>
+                <td>Apex frame index in full video (0-based)</td>
+            </tr>
+            <tr>
+                <td><code>seg_start</code></td>
+                <td>()</td>
+                <td>int32</td>
+                <td>Segment start frame index in full video</td>
+            </tr>
+            <tr>
+                <td><code>seg_end</code></td>
+                <td>()</td>
+                <td>int32</td>
+                <td>Segment end frame index in full video (exclusive)</td>
+            </tr>
+            <tr>
+                <td><code>fps</code></td>
+                <td>()</td>
+                <td>float32</td>
+                <td>Video frames per second</td>
+            </tr>
+            <tr>
+                <td><code>motion_all</code></td>
+                <td>(N,)</td>
+                <td>float32</td>
+                <td>Motion magnitude per frame, full video (N frames)</td>
+            </tr>
+            <tr>
+                <td><code>face_mask_used</code></td>
+                <td>()</td>
+                <td>bool</td>
+                <td>Whether mask was applied to OF</td>
+            </tr>
+            <tr>
+                <td><code>face_mask_size</code></td>
+                <td>()</td>
+                <td>float32</td>
+                <td>Mask radius fraction (0.0-1.0)</td>
+            </tr>
+        </table>
+
+        <h3>Loading Data in Python</h3>
+        <pre>import numpy as np
+
+# Load file
+data = np.load("output/optical_flow_npz/ADFES_F01-Joy-Face Forward.npz")
+
+# Access arrays
+flow = data["flow"]                    # (44, 256, 256, 2)
+frames = data["frames"]                # (45, 256, 256, 3)
+apex_local = int(data["apex_local"])   # e.g., 40
+apex_global = int(data["apex_global"]) # e.g., 123
+fps = float(data["fps"])               # e.g., 25.0
+
+# Compute flow statistics
+u = flow[..., 0]  # horizontal component
+v = flow[..., 1]  # vertical component
+magnitude = np.sqrt(u**2 + v**2)
+angle = np.arctan2(v, u)
+
+print(f"Segment: {len(frames)} frames")
+print(f"Max flow: {magnitude.max():.2f} pixels/frame")
+print(f"Apex at local frame {apex_local}")
+
+# Plot motion curve
+import matplotlib.pyplot as plt
+plt.plot(data["motion_all"])
+plt.axvline(apex_global, color='r', label='Apex')
+plt.xlabel('Frame')
+plt.ylabel('Motion Magnitude')
+plt.legend()
+plt.show()</pre>
+
+        <h2 id="references">References</h2>
+        <h3>Optical Flow</h3>
+        <ul style="margin: 15px 0 15px 30px;">
+            <li>
+                <strong>Farneback, G. (2003).</strong> "Two-Frame Motion Estimation Based on Polynomial Expansion."
+                <em>SCIA 2003</em>. — Dense optical flow using polynomial approximation.
+            </li>
+            <li>
+                <strong>Horn, B. K., & Schunck, B. G. (1981).</strong> "Determining Optical Flow."
+                <em>Artificial Intelligence</em>, 17, 185-203. — Foundational optical flow theory.
+            </li>
+        </ul>
+        <h3>Face Detection</h3>
+        <ul style="margin: 15px 0 15px 30px;">
+            <li>
+                <strong>Viola, P., & Jones, M. (2001).</strong> "Rapid Object Detection using a Boosted Cascade of Simple Features."
+                <em>CVPR 2001</em>. — Haar cascade detector (used in this pipeline).
+            </li>
+            <li>
+                <strong>Lowe, D. G. (2004).</strong> "Distinctive Image Features from Scale-Invariant Keypoints."
+                <em>IJCV</em>, 60(2), 91-110. — SIFT (alternative face alignment method).
+            </li>
+        </ul>
+        <h3>Facial Expression & Action Units</h3>
+        <ul style="margin: 15px 0 15px 30px;">
+            <li>
+                <strong>Ekman, P., & Friesen, W. V. (1978).</strong> "Manual for the Facial Action Coding System."
+                <em>Consulting Psychologists Press</em>. — Standard facial action units (FACS).
+            </li>
+            <li>
+                <strong>Pantic, M., & Bartlett, M. S. (2007).</strong> "Machine Analysis of Facial Expressions."
+                <em>in I-Tech Education and Publishing</em>. — Survey of facial expression analysis.
+            </li>
+        </ul>
+        <h3>Datasets</h3>
+        <ul style="margin: 15px 0 15px 30px;">
+            <li>
+                <strong>ADFES (Amsterdam Dynamic Facial Expression Set)</strong> — Acted dynamic facial expressions
+                from multiple viewpoints.
+            </li>
+            <li>
+                <strong>JeFEE (Japanese Female Facial Expression)</strong> — Spontaneous facial expressions
+                from Japanese female actors.
+            </li>
+        </ul>
+
+        <footer>
+            <p><strong>Facial Expression Optical Flow Pipeline</strong></p>
+            <p>A research tool for quantifying facial motion in video | ORIS Vector Project | April 2026</p>
+            <p style="margin-top: 15px; font-size: 0.85em;">
+                This methodology is provided for research and educational purposes.
+                Always ensure proper dataset licensing and participant consent before use.
+            </p>
+        </footer>
+    </div>
+</body>
+</html>
