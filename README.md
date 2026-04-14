@@ -139,7 +139,7 @@ Binary compressed NumPy archive containing:
 Animated GIF showing per-frame optical flow with:
 - **Colour wheel**: direction (hue) + magnitude (brightness)
 - **White arrows**: sparse flow vectors
-- **Orange circle**: face mask boundary
+- **Orange oval**: face mask boundary (black background outside)
 - **Frame counter**: segment frame index
 - **"APEX" label**: marks apex frames
 - **"MASK" label**: indicates mask region

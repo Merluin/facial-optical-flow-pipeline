@@ -498,8 +498,8 @@ seg_frames = std_frames[seg_start : seg_end]
         <div class="step">
             <div><span class="step-number">7</span><span class="step-title">Isolate Facial Motion (Optional)</span></div>
             <p style="margin-top: 15px;">
-                Optionally create a circular mask to isolate optical flow computation to the face region only,
-                excluding shoulders, neck, and background.
+                Optionally create an elliptical (oval) mask to isolate optical flow computation to the face region only,
+                excluding shoulders, neck, and background. The ellipse shape better frames the face proportions.
             </p>
             <h3>Configuration:</h3>
             <div class="parameter">
@@ -509,12 +509,13 @@ FACE_MASK_SIZE = 0.85  # 85% of frame size (0.0-1.0)
             <h3>Mask Generation:</h3>
             <div class="formula">
 center = (CROP_SIZE/2, CROP_SIZE/2)
-radius = (min(CROP_SIZE, CROP_SIZE) / 2) × FACE_MASK_SIZE
-mask = cv2.circle(zeros(CROP_SIZE, CROP_SIZE), center, radius, 255, -1)
+axes_x = (CROP_SIZE / 2) × FACE_MASK_SIZE × 0.9  # narrower (90%)
+axes_y = (CROP_SIZE / 2) × FACE_MASK_SIZE        # taller (100%)
+mask = cv2.ellipse(zeros(CROP_SIZE, CROP_SIZE), center, (axes_x, axes_y), 255, -1)
             </div>
             <p>
-                Create a binary circular mask (0 outside, 255 inside) at the center of the 256×256 crop.
-                Radius is <code>FACE_MASK_SIZE</code> fraction of the frame size.
+                Create a binary elliptical mask (0 outside, 255 inside) at the center of the 256×256 crop.
+                The ellipse is taller than wide (90% horizontal, 100% vertical) to match face proportions and better frame facial features.
             </p>
             <h3>Application to Optical Flow:</h3>
             <div class="formula">
@@ -651,11 +652,16 @@ FOR each (y, x) in grid(step=ARROW_STEP):
     cv2.arrowedLine(frame, (x,y), (end_x,end_y), white, thickness=1)
             </div>
             <p>Draw white arrows on a regular grid (spacing = ARROW_STEP pixels) scaled by ARROW_SCALE.</p>
-            <h4>C) Draw Mask Circle (if enabled)</h4>
+            <h4>C) Apply Mask & Draw Boundary (if enabled)</h4>
             <div class="formula">
-cv2.circle(frame, center=(128,128), radius=int(256/2 × 0.85), color=orange, thickness=2)
+# Black out background outside mask
+mask_inv = bitwise_not(mask)
+frame = copyTo(frame, mask) + copyTo(black, mask_inv)
+
+# Draw oval boundary
+cv2.ellipse(frame, center=(128,128), axes=(axes_x, axes_y), color=orange, thickness=2)
             </div>
-            <p>Orange circle shows the mask boundary.</p>
+            <p>Background outside the ellipse is blacked out for focus. Orange oval boundary marks the mask region.</p>
             <h4>D) Annotate Frame</h4>
             <ul style="margin: 10px 0 10px 30px;">
                 <li>Frame counter (bottom-left): global frame index</li>

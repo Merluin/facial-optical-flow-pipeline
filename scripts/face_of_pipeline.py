@@ -248,15 +248,17 @@ def register_to_reference(frame_bgr: np.ndarray, bbox: tuple[int, int, int, int]
 
 def create_face_mask(h: int, w: int, mask_size: float) -> np.ndarray:
     """
-    Create a circular face mask.
+    Create an elliptical (oval) face mask that frames the face.
     h, w: frame dimensions
     mask_size: fraction of frame to mask (0.0-1.0)
     Returns binary mask (0=outside, 255=inside).
     """
     mask = np.zeros((h, w), dtype=np.uint8)
     center = (w // 2, h // 2)
-    radius = int((min(h, w) / 2) * mask_size)
-    cv2.circle(mask, center, radius, 255, -1)  # filled circle
+    # Ellipse: taller than wide to match face proportions
+    axes_x = int((w / 2) * mask_size * 0.9)      # narrower (90% of horizontal)
+    axes_y = int((h / 2) * mask_size)             # taller (100% of vertical, to frame face)
+    cv2.ellipse(mask, center, (axes_x, axes_y), 0, 0, 360, 255, -1)  # filled ellipse
     return mask
 
 
@@ -482,12 +484,21 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
         # arrow overlay
         blended = draw_arrows(blended, flow, ARROW_STEP, ARROW_SCALE)
 
-        # draw mask boundary (if enabled)
+        # apply mask: black out background (if enabled)
         if face_mask is not None:
             center = (CROP_SIZE // 2, CROP_SIZE // 2)
-            radius = int((min(CROP_SIZE, CROP_SIZE) / 2) * FACE_MASK_SIZE)
-            cv2.circle(blended, center, radius, (100, 200, 255), 2)  # orange circle
-            cv2.putText(blended, "MASK", (center[0] - 20, center[1] - radius + 15),
+            axes_x = int((CROP_SIZE / 2) * FACE_MASK_SIZE * 0.9)
+            axes_y = int((CROP_SIZE / 2) * FACE_MASK_SIZE)
+
+            # Create inverse mask to black out background
+            mask_inv = cv2.bitwise_not(face_mask)
+            # Apply black overlay to background
+            black = np.zeros_like(blended)
+            blended = cv2.copyTo(blended, face_mask) + cv2.copyTo(black, mask_inv)
+
+            # Draw oval boundary (orange)
+            cv2.ellipse(blended, center, (axes_x, axes_y), 0, 0, 360, (100, 200, 255), 2)
+            cv2.putText(blended, "MASK", (center[0] - 20, center[1] - axes_y + 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 200, 255), 1)
 
         # mark apex frame
