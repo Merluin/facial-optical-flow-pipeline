@@ -1,30 +1,42 @@
 """
 Raw Facial Landmark Tracking (Frame-by-Frame)
 ==============================================
-Tracks facial landmarks on raw frames with no preprocessing.
+Tracks 106 facial landmarks on raw frames with head movement stabilization.
 
-- No face crop
-- No video stabilization
-- No normalization
-- Just landmarks frame-by-frame
+Features:
+  - Detects all 106 face landmarks using insightface
+  - Stabilizes head movement using face boundary landmarks (affine registration)
+  - Computes expression-only optical flow (excludes head rotation/translation)
+  - Creates GIF with per-frame motion arrows
+  - Identifies expression apex (max expression intensity)
+  - Saves apex frame visualization with weighted motion arrows
 
 Landmarks: 106 points (insightface buffalo_l landmark_2d_106)
 
-GIF output shows:
+GIF visualization:
   - All 106 landmarks as colored dots
-  - Optical flow arrows: per-landmark displacement vector between
-    consecutive frames (frame t-1 → frame t), scaled for visibility
+  - Yellow arrows: optical flow between consecutive frames (t-1 → t)
+    (arrows show expression motion after head stabilization)
+
+Apex image:
+  - Blue dots: landmark positions at frame 0 (baseline)
+  - Colored dots: landmark positions at apex frame
+  - Arrows: cumulative motion from frame 0 → apex
+  - Arrow thickness & brightness: proportional to motion magnitude
 
 Usage:
     python scripts/face_landmarks_raw.py
 
 Output:
-    output/landmarks_raw_npz/
+    output/landmarks_raw_npz/        # Raw 106 landmarks per frame
         ├── ADFES_video_name.npz
         └── JeFEE_video_name.npz
-    output/landmarks_raw_gif/
+    output/landmarks_raw_gif/        # Animation (stabilized landmarks)
         ├── ADFES_video_name.gif
         └── JeFEE_video_name.gif
+    output/landmarks_raw_apex/       # Apex frame (expression intensity)
+        ├── ADFES_video_name_apex.png
+        └── JeFEE_video_name_apex.png
 """
 
 import sys
@@ -51,8 +63,8 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 LANDMARK_RADIUS = 3
 BBOX_COLOR = (0, 255, 0)  # Green
 GIF_SPEED = 0.5  # Fraction of real speed
-ARROW_SCALE = 3.0          # Multiply raw displacement to make arrows visible
-ARROW_MIN_LENGTH = 1.0     # Skip arrows shorter than this (pixels) to reduce clutter
+ARROW_SCALE = 15.0         # Exaggerate displacement 15x for visibility (typical ~0.3-0.5 px/frame motion)
+ARROW_MIN_LENGTH = 0.05    # Only skip if real displacement < 0.05 px (almost no motion)
 ARROW_COLOR = (0, 200, 255)  # Yellow-ish (BGR) for all OF arrows
 
 # Landmark colors: rotate through distinct colors for visibility
@@ -101,6 +113,196 @@ def load_video(path: Path) -> tuple[list[np.ndarray], float]:
     cap.release()
     print(f"[INFO] Loaded {len(frames)} frames at {fps:.2f} fps")
     return frames, fps
+
+
+def stabilize_landmarks_affine(landmarks_dict: dict, ref_landmarks_dict: dict) -> dict:
+    """
+    Register landmarks to reference frame using affine transform.
+    Uses face boundary landmarks (contour) for robust alignment.
+
+    insightface 106-point layout:
+      - 0-32: Face contour (jaw + cheeks)
+      - Uses corners/edges of face boundary to compute transform
+
+    Returns registered landmarks dict (same structure, transformed coordinates).
+    """
+    # Face boundary landmark indices (approx jaw & contour corners)
+    BOUNDARY_INDICES = [0, 8, 16, 33, 50, 58, 68]  # key contour points
+
+    # Extract boundary points from reference and current frame
+    ref_pts = []
+    curr_pts = []
+    for idx in BOUNDARY_INDICES:
+        ref_lm = ref_landmarks_dict.get(f"landmark_{idx}")
+        curr_lm = landmarks_dict.get(f"landmark_{idx}")
+        if ref_lm is not None and curr_lm is not None:
+            ref_pts.append(ref_lm)
+            curr_pts.append(curr_lm)
+
+    if len(ref_pts) < 3:
+        # Not enough points for affine — return original
+        return landmarks_dict
+
+    ref_pts = np.array(ref_pts, dtype=np.float32)
+    curr_pts = np.array(curr_pts, dtype=np.float32)
+
+    # Compute affine transform: curr_pts → ref_pts (register to reference)
+    M = cv2.getAffineTransform(curr_pts[:3], ref_pts[:3])
+
+    # Apply transform to all landmarks
+    registered = {}
+    for name, lm in landmarks_dict.items():
+        if lm is None:
+            registered[name] = None
+        else:
+            # Transform point: [x, y, 1] @ M^T → [x', y']
+            pt_homog = np.array([lm[0], lm[1], 1.0], dtype=np.float32)
+            pt_warped = M @ pt_homog
+            registered[name] = pt_warped.astype(np.float32)
+
+    return registered
+
+
+def compute_landmark_motion(landmarks_sequence: list, stabilized_sequence: list = None) -> np.ndarray:
+    """
+    Compute cumulative motion magnitude per frame (from frame 0 to current).
+    If stabilized_sequence provided, use that (head-stabilized landmarks).
+    Otherwise use raw landmarks (includes head movement).
+
+    Returns array of shape (n_frames,) with total displacement from frame 0.
+    """
+    # Use stabilized landmarks if provided, otherwise raw landmarks
+    lm_seq = stabilized_sequence if stabilized_sequence is not None else landmarks_sequence
+
+    motion = np.zeros(len(lm_seq), dtype=np.float32)
+
+    # Find first frame with valid landmarks as reference
+    ref_landmarks = None
+    for lm_dict in lm_seq:
+        if lm_dict is not None:
+            has_valid = any(lm is not None for lm in lm_dict.values())
+            if has_valid:
+                ref_landmarks = lm_dict
+                break
+
+    if ref_landmarks is None:
+        return motion
+
+    for i, lm_dict in enumerate(lm_seq):
+        if lm_dict is None:
+            motion[i] = motion[i - 1] if i > 0 else 0
+            continue
+
+        total_displacement = 0.0
+        for name in LANDMARKS:
+            curr = lm_dict.get(name)
+            ref = ref_landmarks.get(name)
+            if curr is None or ref is None:
+                continue
+            displacement = np.linalg.norm(curr - ref)
+            total_displacement += displacement
+
+        motion[i] = total_displacement
+
+    return motion
+
+
+def create_apex_visualization(frame: np.ndarray, landmarks_0: dict, landmarks_apex: dict,
+                              apex_idx: int, output_path: Path) -> None:
+    """
+    Create visualization of apex frame with arrows showing cumulative motion from frame 0.
+    Arrow thickness and color intensity scaled by motion magnitude.
+    """
+    canvas = frame.copy()
+    h, w = canvas.shape[:2]
+
+    # Compute per-landmark motion magnitudes (for arrow scaling)
+    max_motion = 0.0
+    motions = {}
+    for name in LANDMARKS:
+        curr = landmarks_apex.get(name)
+        prev = landmarks_0.get(name)
+        if curr is None or prev is None:
+            motions[name] = 0.0
+            continue
+        displacement = np.linalg.norm(curr - prev)
+        motions[name] = displacement
+        max_motion = max(max_motion, displacement)
+
+    # Draw arrows (baseline → apex)
+    if max_motion > 0:
+        norm = Normalize(vmin=0, vmax=max_motion)
+    else:
+        norm = None
+
+    for name in LANDMARKS:
+        curr = landmarks_apex.get(name)
+        prev = landmarks_0.get(name)
+        if curr is None or prev is None:
+            continue
+
+        displacement = motions[name]
+        if displacement < 0.1:
+            continue
+
+        # Arrow thickness and color based on motion magnitude
+        if norm is not None:
+            intensity = norm(displacement)  # 0.0 to 1.0
+        else:
+            intensity = 0.5
+
+        thickness = max(1, int(1 + intensity * 3))
+        color_val = int(50 + intensity * 200)
+        arrow_color = (color_val, color_val, 255)  # Red-ish, brighter = more motion
+
+        # Arrow originates at APEX position, points forward along motion direction
+        # motion_vec = apex - frame0 (direction and magnitude of motion)
+        pt1 = tuple(curr.astype(int))  # Origin at apex landmark
+        motion_vec = curr - prev  # frame0 -> apex displacement (direction + magnitude)
+        pt2_pos = curr + motion_vec  # Points forward (continuing motion direction)
+        pt2 = tuple(pt2_pos.astype(int))
+
+        # Clamp to image bounds
+        pt1 = (max(0, min(w - 1, pt1[0])), max(0, min(h - 1, pt1[1])))
+        pt2 = (max(0, min(w - 1, pt2[0])), max(0, min(h - 1, pt2[1])))
+
+        cv2.arrowedLine(canvas, pt1, pt2, arrow_color, thickness, tipLength=0.2)
+
+    # Draw only apex landmarks (colored dots, no frame-0 landmarks)
+    for name in LANDMARKS:
+        lm_apex = landmarks_apex.get(name)
+        if lm_apex is not None:
+            idx = int(name.split('_')[1])
+            color = get_landmark_color(idx)
+            pos = tuple(lm_apex.astype(int))
+            pos = (max(0, min(w - 1, pos[0])), max(0, min(h - 1, pos[1])))
+            cv2.circle(canvas, pos, LANDMARK_RADIUS, color, -1)
+            cv2.circle(canvas, pos, LANDMARK_RADIUS, (255, 255, 255), 1)
+
+    # Add text annotations
+    cv2.putText(canvas, f"APEX (Frame {apex_idx})", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    cv2.putText(canvas, "Expression Motion Trajectories (Frame 0 → Apex)", (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+    cv2.putText(canvas, "Colored dots=Apex  Arrows originate at apex, point forward (motion direction)", (10, canvas.shape[0] - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+    # Save
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_path), canvas)
+    print(f"[INFO] Saved apex visualization → {output_path}")
+
+
+class Normalize:
+    """Simple min-max normalization for arrow scaling."""
+    def __init__(self, vmin=0, vmax=1):
+        self.vmin = vmin
+        self.vmax = vmax
+
+    def __call__(self, value):
+        if self.vmax == self.vmin:
+            return 0.5
+        return (value - self.vmin) / (self.vmax - self.vmin)
 
 
 # Printed once to help diagnose which landmark attributes the model exposes
@@ -174,25 +376,30 @@ def create_visualization_gif(frames: list[np.ndarray], bboxes: list, landmarks_s
             cv2.rectangle(canvas, (x, y), (x + w, y + h), BBOX_COLOR, 2)
 
         lm_dict = landmarks_sequence[i]
-        prev_lm_dict = landmarks_sequence[i - 1] if i > 0 else None
 
-        # Draw OF arrows (landmark displacement frame t-1 → t)
-        if lm_dict is not None and prev_lm_dict is not None:
+        # Draw OF arrows (landmark displacement from frame t-1 → frame t)
+        if i > 0:
+            prev_lm_dict = landmarks_sequence[i - 1]
             for name in LANDMARKS:
                 curr = lm_dict.get(name)
                 prev = prev_lm_dict.get(name)
                 if curr is None or prev is None:
                     continue
-                dx = curr[0] - prev[0]
-                dy = curr[1] - prev[1]
+
+                # Compute displacement and magnitude
+                dx = float(curr[0] - prev[0])
+                dy = float(curr[1] - prev[1])
                 length = np.sqrt(dx * dx + dy * dy)
+
+                # Skip near-zero motion
                 if length < ARROW_MIN_LENGTH:
                     continue
+
+                # Draw arrow: from prev position, scaled displacement
                 pt1 = tuple(prev.astype(int))
-                pt2 = (int(prev[0] + dx * ARROW_SCALE),
-                        int(prev[1] + dy * ARROW_SCALE))
-                cv2.arrowedLine(canvas, pt1, pt2, ARROW_COLOR, 1,
-                                tipLength=0.3)
+                scaled_pt2 = prev + np.array([dx * ARROW_SCALE, dy * ARROW_SCALE])
+                pt2 = tuple(scaled_pt2.astype(int))
+                cv2.arrowedLine(canvas, pt1, pt2, ARROW_COLOR, 1, tipLength=0.3)
 
         # Draw landmarks (on top of arrows)
         if lm_dict is not None:
@@ -254,11 +461,47 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
     detected = sum(1 for b in bboxes if b is not None)
     print(f"[INFO] Face detected in {detected}/{n_frames} frames")
 
-    # Create GIF visualization
+    # Head stabilization: register all landmarks to frame 0 using face boundary
+    print("[INFO] Stabilizing head movement using face boundary landmarks …")
+    stabilized_landmarks_sequence = [None] * n_frames
+    if landmarks_sequence[0] is not None:
+        ref_frame_landmarks = landmarks_sequence[0]
+        for i, lm_dict in enumerate(landmarks_sequence):
+            if lm_dict is None:
+                stabilized_landmarks_sequence[i] = None
+            elif i == 0:
+                # Frame 0 is already the reference
+                stabilized_landmarks_sequence[i] = lm_dict
+            else:
+                # Register frame i to frame 0
+                stabilized_landmarks_sequence[i] = stabilize_landmarks_affine(lm_dict, ref_frame_landmarks)
+        print(f"  … stabilized {n_frames} frames")
+    else:
+        stabilized_landmarks_sequence = landmarks_sequence
+        print(f"  [WARN] No landmarks in frame 0, skipping stabilization")
+
+    # Create GIF visualization (using stabilized landmarks)
     gif_dir = output_root / "landmarks_raw_gif"
     gif_dir.mkdir(parents=True, exist_ok=True)
     gif_path = gif_dir / f"{dataset_name}_{video_stem}.gif"
-    create_visualization_gif(frames, bboxes, landmarks_sequence, gif_path, fps)
+    create_visualization_gif(frames, bboxes, stabilized_landmarks_sequence, gif_path, fps)
+
+    # Compute motion and find apex frame (on stabilized landmarks)
+    print("[INFO] Computing expression motion to find apex …")
+    motion = compute_landmark_motion(stabilized_landmarks_sequence)
+    apex_idx = int(np.argmax(motion))
+    print(f"[INFO] Apex frame: {apex_idx} (expression motion={motion[apex_idx]:.1f})")
+
+    # Create apex visualization with arrows (baseline → apex, stabilized)
+    if apex_idx > 0 and stabilized_landmarks_sequence[0] is not None and stabilized_landmarks_sequence[apex_idx] is not None:
+        apex_dir = output_root / "landmarks_raw_apex"
+        apex_dir.mkdir(parents=True, exist_ok=True)
+        apex_path = apex_dir / f"{dataset_name}_{video_stem}_apex.png"
+        create_apex_visualization(frames[apex_idx], stabilized_landmarks_sequence[0],
+                                 stabilized_landmarks_sequence[apex_idx],
+                                 apex_idx, apex_path)
+    else:
+        print(f"[WARN] Could not create apex visualization (invalid stabilized landmarks at frame 0 or {apex_idx})")
 
     # Save NPZ
     npz_dir = output_root / "landmarks_raw_npz"
@@ -337,6 +580,8 @@ def main():
     print(f"Output:")
     print(f"  NPZ data      : {output_root / 'landmarks_raw_npz'}")
     print(f"  GIF viz       : {output_root / 'landmarks_raw_gif'}")
+    print(f"  Apex image    : {output_root / 'landmarks_raw_apex'}")
+    print(f"                  (cumulative motion from frame 0 → apex)")
     print(f"{'='*70}\n")
 
 
