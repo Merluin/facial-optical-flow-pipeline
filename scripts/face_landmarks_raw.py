@@ -203,17 +203,22 @@ def load_video(path: Path) -> tuple[list[np.ndarray], float]:
 
 def stabilize_landmarks_affine(landmarks_dict: dict, ref_landmarks_dict: dict) -> dict:
     """
-    Register landmarks to reference frame using affine transform.
-    Uses face boundary landmarks (contour) for robust alignment.
+    Register landmarks to reference frame using robust affine transform.
+    Uses ALL face boundary landmarks (contour) for least-squares fitting.
 
     insightface 106-point layout:
-      - 0-32: Face contour (jaw + cheeks)
-      - Uses corners/edges of face boundary to compute transform
+      - 0-16: Jaw contour (left to right)
+      - 17-32: Face cheeks/contour
+      - Robust fitting uses all available points
 
     Returns registered landmarks dict (same structure, transformed coordinates).
     """
-    # Face boundary landmark indices (approx jaw & contour corners)
-    BOUNDARY_INDICES = [0, 8, 16, 33, 50, 58, 68]  # key contour points
+    # Use jaw + contour + nose landmarks for robust registration
+    # Face contour (jaw + cheeks) + nose (stable reference for rotation)
+    BOUNDARY_INDICES = (
+        list(range(0, 33)) +      # Jaw + face contour (0-32)
+        list(range(51, 58))       # Nose landmarks (51-57)
+    )
 
     # Extract boundary points from reference and current frame
     ref_pts = []
@@ -232,8 +237,13 @@ def stabilize_landmarks_affine(landmarks_dict: dict, ref_landmarks_dict: dict) -
     ref_pts = np.array(ref_pts, dtype=np.float32)
     curr_pts = np.array(curr_pts, dtype=np.float32)
 
-    # Compute affine transform: curr_pts → ref_pts (register to reference)
-    M = cv2.getAffineTransform(curr_pts[:3], ref_pts[:3])
+    # Compute affine transform with least-squares fitting (uses all points)
+    # This is more robust than cv2.getAffineTransform which uses exactly 3 points
+    M, inliers = cv2.estimateAffinePartial2D(curr_pts, ref_pts)
+
+    if M is None:
+        # Fallback: use first 3 points
+        M = cv2.getAffineTransform(curr_pts[:3], ref_pts[:3])
 
     # Apply transform to all landmarks
     registered = {}
