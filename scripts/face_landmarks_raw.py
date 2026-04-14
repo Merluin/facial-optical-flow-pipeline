@@ -1,42 +1,117 @@
 """
-Raw Facial Landmark Tracking (Frame-by-Frame)
-==============================================
-Tracks 106 facial landmarks on raw frames with head movement stabilization.
+Raw Facial Landmark Tracking Pipeline
+======================================
+Complete analysis of facial expression using 106-point landmark tracking with
+head movement stabilization and optical flow visualization.
 
-Features:
-  - Detects all 106 face landmarks using insightface
-  - Stabilizes head movement using face boundary landmarks (affine registration)
-  - Computes expression-only optical flow (excludes head rotation/translation)
-  - Creates GIF with per-frame motion arrows
-  - Identifies expression apex (max expression intensity)
-  - Saves apex frame visualization with weighted motion arrows
+FEATURES
+────────
+✓ 106-point facial landmark detection (insightface buffalo_l model)
+✓ Head stabilization via affine registration (uses face contour landmarks)
+✓ Expression-only optical flow (eliminates head rotation & translation)
+✓ Per-frame motion visualization (GIF with optical flow arrows)
+✓ Apex detection (identifies peak expression frame)
+✓ Motion trajectory visualization (apex frame with weighted arrows)
+✓ Expression arc analysis (intensity curve over time)
+✓ Professional summary report (PDF with all visualizations)
 
-Landmarks: 106 points (insightface buffalo_l landmark_2d_106)
+WORKFLOW
+────────
+1. Load video frames
+2. Detect 106 landmarks on each frame using insightface
+3. Stabilize landmarks using face boundary points (affine registration to frame 0)
+4. Compute frame-to-frame optical flow (expression motion)
+5. Identify apex frame (maximum cumulative displacement)
+6. Generate outputs:
+   - GIF: stabilized video with optical flow arrows
+   - Apex image: peak expression with motion vectors
+   - Arc plot: expression intensity curve
+   - Summary PDF: professional report with all analyses
 
-GIF visualization:
-  - All 106 landmarks as colored dots
-  - Yellow arrows: optical flow between consecutive frames (t-1 → t)
-    (arrows show expression motion after head stabilization)
+OUTPUTS
+───────
 
-Apex image:
-  - Blue dots: landmark positions at frame 0 (baseline)
-  - Colored dots: landmark positions at apex frame
-  - Arrows: cumulative motion from frame 0 → apex
-  - Arrow thickness & brightness: proportional to motion magnitude
+NPZ Archives (Raw Data):
+  output/landmarks_raw_npz/
+    └── <dataset>_<video>.npz        # 106 landmarks per frame (raw coordinates)
 
-Usage:
+GIF Animation (Frame-by-Frame):
+  output/landmarks_raw_gif/
+    └── <dataset>_<video>.gif        # Stabilized video with optical flow arrows
+                                      # Yellow arrows show expression motion
+                                      # Between consecutive frames (t-1 → t)
+
+Expression Analysis (Images & Report):
+  output/landmarks_raw_apex/
+    ├── <dataset>_<video>_apex.png       # Apex frame with motion vectors
+    │                                     # • Colored dots: landmark positions
+    │                                     # • Arrows: motion direction & magnitude
+    │                                     # • Origin: apex position
+    │                                     # • Direction: forward along motion
+    ├── <dataset>_<video>_arc.png        # Expression arc plot
+    │                                     # • X-axis: frame number
+    │                                     # • Y-axis: motion magnitude
+    │                                     # • Red line: marks apex frame
+    └── <dataset>_<video>_summary.pdf    # Professional summary report
+                                         # 2×2 grid layout with metadata:
+                                         # ① Stabilized video frame (apex)
+                                         # ② Apex image with motion vectors
+                                         # ③ Expression arc plot
+                                         # + Title, frame info, footer
+
+VISUALIZATIONS EXPLAINED
+────────────────────────
+
+GIF (Stabilized Video):
+  - 106 landmarks (colored dots) on each frame
+  - Yellow optical flow arrows between consecutive frames
+  - Arrows show expression motion (head movement already removed)
+  - Green bbox shows detected face region
+  - Green text shows frame counter and detection status
+
+Apex Image (Peak Expression):
+  - Background: the actual apex frame from the video
+  - Colored dots: all 106 landmarks at peak expression
+  - Arrows: originate at each landmark, point forward
+  - Arrow length: proportional to displacement from frame 0
+  - Arrow thickness & brightness: brighter/thicker = more motion
+  - Visualizes which facial regions moved most (e.g., mouth, eyebrows)
+
+Expression Arc:
+  - Shows motion magnitude throughout the video
+  - Smooth curve from onset to offset of expression
+  - Peak marked with red vertical dashed line (apex)
+  - Used to identify expression phases:
+    * Onset: gradual increase
+    * Apex: peak plateau
+    * Offset: return to baseline
+
+Summary PDF:
+  - Professional 1-page report with all key visualizations
+  - Title bar: video name, apex frame number, motion intensity
+  - Top section: GIF frame + apex image side-by-side
+  - Bottom section: expression arc plot
+  - Footer: pipeline info and generation timestamp
+
+PARAMETERS
+──────────
+  ARROW_SCALE = 15.0              # Exaggerate optical flow arrows by 15×
+  ARROW_MIN_LENGTH = 0.05         # Skip arrows < 0.05 px (noise filtering)
+  LANDMARK_RADIUS = 3             # Radius of landmark dot markers
+  GIF_SPEED = 0.5                 # GIF playback speed (0.5 = half speed)
+
+USAGE
+─────
     python scripts/face_landmarks_raw.py
 
-Output:
-    output/landmarks_raw_npz/        # Raw 106 landmarks per frame
-        ├── ADFES_video_name.npz
-        └── JeFEE_video_name.npz
-    output/landmarks_raw_gif/        # Animation (stabilized landmarks)
-        ├── ADFES_video_name.gif
-        └── JeFEE_video_name.gif
-    output/landmarks_raw_apex/       # Apex frame (expression intensity)
-        ├── ADFES_video_name_apex.png
-        └── JeFEE_video_name_apex.png
+REQUIREMENTS
+────────────
+  - insightface with onnxruntime (106-point landmark detection)
+  - opencv-python (cv2)
+  - numpy
+  - imageio (GIF creation)
+  - matplotlib (plotting & PDF generation)
+  - Pillow/PIL (image processing)
 """
 
 import sys
@@ -45,6 +120,7 @@ from pathlib import Path
 import cv2
 import imageio
 import numpy as np
+import matplotlib.pyplot as plt
 
 try:
     from insightface.app import FaceAnalysis
@@ -81,9 +157,19 @@ def get_landmark_color(idx):
     return colors[idx % len(colors)]
 
 # insightface generates 106 landmarks per face
-# We'll track all of them for comprehensive facial analysis
 N_LANDMARKS = 106
 LANDMARKS = [f"landmark_{i}" for i in range(N_LANDMARKS)]
+
+# KEY LANDMARKS FOR EXPRESSION ANALYSIS (4 points minimum)
+# Anguli oris (mouth corners) + middle forehead (between eyebrows)
+KEY_LANDMARK_INDICES = [
+    84,    # Left mouth corner (anguli oris sinister)
+    90,    # Right mouth corner (anguli oris dexter)
+    38,    # Left eyebrow inner point (middle face, over left eyebrow)
+    48,    # Right eyebrow inner point (middle face, over right eyebrow)
+]
+KEY_LANDMARKS = [f"landmark_{i}" for i in KEY_LANDMARK_INDICES]
+N_KEY_LANDMARKS = len(KEY_LANDMARK_INDICES)
 
 
 def find_all_videos(root_dir: Path) -> list[tuple[Path, str, str]]:
@@ -207,6 +293,97 @@ def compute_landmark_motion(landmarks_sequence: list, stabilized_sequence: list 
     return motion
 
 
+def create_apex_visualization_key(frame: np.ndarray, landmarks_0: dict, landmarks_apex: dict,
+                                  apex_idx: int, output_path: Path) -> None:
+    """
+    Create apex visualization using only KEY LANDMARKS (subset for expression).
+    Exaggerated arrow magnitude for clarity.
+    """
+    canvas = frame.copy()
+    h, w = canvas.shape[:2]
+
+    # Exaggeration factor for key landmarks visualization
+    ARROW_SCALE_KEY = 40.0  # Highly exaggerate for visibility
+
+    # Compute per-landmark motion magnitudes (for key landmarks only)
+    max_motion = 0.0
+    motions = {}
+    for idx in KEY_LANDMARK_INDICES:
+        name = f"landmark_{idx}"
+        curr = landmarks_apex.get(name)
+        prev = landmarks_0.get(name)
+        if curr is None or prev is None:
+            motions[name] = 0.0
+            continue
+        displacement = np.linalg.norm(curr - prev)
+        motions[name] = displacement
+        max_motion = max(max_motion, displacement)
+
+    # Draw arrows (key landmarks only)
+    if max_motion > 0:
+        norm = Normalize(vmin=0, vmax=max_motion)
+    else:
+        norm = None
+
+    for idx in KEY_LANDMARK_INDICES:
+        name = f"landmark_{idx}"
+        curr = landmarks_apex.get(name)
+        prev = landmarks_0.get(name)
+        if curr is None or prev is None:
+            continue
+
+        displacement = motions[name]
+        if displacement < 0.05:  # Lower threshold for key landmarks
+            continue
+
+        # Arrow thickness and color based on motion magnitude (exaggerated)
+        if norm is not None:
+            intensity = norm(displacement)
+        else:
+            intensity = 0.5
+
+        thickness = max(2, int(2 + intensity * 5))  # Thicker arrows
+        color_val = int(100 + intensity * 155)  # Brighter colors
+        arrow_color = (color_val, color_val, 255)
+
+        # Arrow originates at apex, points forward (EXAGGERATED)
+        pt1 = tuple(curr.astype(int))
+        motion_vec = curr - prev
+        pt2_pos = curr + motion_vec * ARROW_SCALE_KEY  # 40× exaggeration
+        pt2 = tuple(pt2_pos.astype(int))
+
+        # Clamp to bounds
+        pt1 = (max(0, min(w - 1, pt1[0])), max(0, min(h - 1, pt1[1])))
+        pt2 = (max(0, min(w - 1, pt2[0])), max(0, min(h - 1, pt2[1])))
+
+        cv2.arrowedLine(canvas, pt1, pt2, arrow_color, thickness, tipLength=0.2)
+
+    # Draw key landmarks (colored dots)
+    for idx in KEY_LANDMARK_INDICES:
+        name = f"landmark_{idx}"
+        lm_apex = landmarks_apex.get(name)
+        if lm_apex is not None:
+            color = get_landmark_color(idx)
+            pos = tuple(lm_apex.astype(int))
+            pos = (max(0, min(w - 1, pos[0])), max(0, min(h - 1, pos[1])))
+            cv2.circle(canvas, pos, LANDMARK_RADIUS + 1, color, -1)
+            cv2.circle(canvas, pos, LANDMARK_RADIUS + 1, (255, 255, 255), 1)
+
+    # Add text annotations
+    cv2.putText(canvas, f"APEX (Frame {apex_idx}) - KEY LANDMARKS", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    cv2.putText(canvas, "Expression Motion Trajectories (Frame 0 → Apex)", (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+    cv2.putText(canvas, f"Key Landmarks: {N_KEY_LANDMARKS} points (2× anguli oris + 2× inner eyebrow)",
+                (10, canvas.shape[0] - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+    # Save
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_path), canvas)
+    print(f"[INFO] Saved key landmarks apex visualization → {output_path}")
+
+
 def create_apex_visualization(frame: np.ndarray, landmarks_0: dict, landmarks_apex: dict,
                               apex_idx: int, output_path: Path) -> None:
     """
@@ -291,6 +468,158 @@ def create_apex_visualization(frame: np.ndarray, landmarks_0: dict, landmarks_ap
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), canvas)
     print(f"[INFO] Saved apex visualization → {output_path}")
+
+
+def create_expression_arc_plot(motion: np.ndarray, apex_idx: int, output_path: Path) -> None:
+    """
+    Create a plot showing expression intensity (motion magnitude) over time.
+    Marks the apex (peak expression) with a vertical red dashed line.
+    """
+    fig, ax = plt.subplots(figsize=(12, 5), dpi=100)
+
+    frames = np.arange(len(motion))
+    ax.plot(frames, motion, linewidth=2, color='#1f77b4')
+    ax.axvline(x=apex_idx, color='red', linestyle='--', linewidth=2, label='Apex')
+
+    ax.set_xlabel('Frame', fontsize=12)
+    ax.set_ylabel('Motion Magnitude', fontsize=12)
+    ax.set_title('Expression Arc', fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10)
+
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(str(output_path), dpi=100, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Saved expression arc plot → {output_path}")
+
+
+def create_summary_pdf(gif_path: Path, apex_img_path: Path, arc_img_path: Path,
+                       output_pdf_path: Path, apex_idx: int, dataset_name: str = "",
+                       video_stem: str = "", n_frames: int = 0, apex_motion: float = 0.0) -> None:
+    """
+    Create a professional summary PDF with 2x2 grid layout and metadata.
+
+    Layout:
+      [Title with video info]
+      [GIF frame (apex)] [Apex image with motion vectors]
+      [Expression arc plot - spans both columns]
+    """
+    from PIL import Image
+    import matplotlib.gridspec as gridspec
+    from matplotlib.patches import Rectangle
+
+    # Extract key frames from GIF (onset, mid, apex)
+    gif_frames = imageio.mimread(str(gif_path))
+    n_gif_frames = len(gif_frames)
+
+    # Select frames to show progression: start, middle, apex
+    frame_onset = gif_frames[0] if n_gif_frames > 0 else None
+    frame_mid = gif_frames[n_gif_frames // 2] if n_gif_frames > 1 else frame_onset
+    frame_apex = gif_frames[min(apex_idx, n_gif_frames - 1)] if n_gif_frames > 0 else None
+
+    # Create a horizontal strip showing progression
+    if frame_onset is not None and frame_mid is not None and frame_apex is not None:
+        onset_pil = Image.fromarray(frame_onset)
+        mid_pil = Image.fromarray(frame_mid)
+        apex_pil = Image.fromarray(frame_apex)
+
+        # Resize frames to same height for stitching
+        h_target = 250
+        aspect_onset = onset_pil.width / onset_pil.height
+        aspect_mid = mid_pil.width / mid_pil.height
+        aspect_apex = apex_pil.width / apex_pil.height
+
+        onset_pil = onset_pil.resize((int(h_target * aspect_onset), h_target), Image.Resampling.LANCZOS)
+        mid_pil = mid_pil.resize((int(h_target * aspect_mid), h_target), Image.Resampling.LANCZOS)
+        apex_pil = apex_pil.resize((int(h_target * aspect_apex), h_target), Image.Resampling.LANCZOS)
+
+        # Stitch frames horizontally
+        total_width = onset_pil.width + mid_pil.width + apex_pil.width + 10
+        gif_progression = Image.new('RGB', (total_width, h_target + 40), color='white')
+        gif_progression.paste(onset_pil, (0, 0))
+        gif_progression.paste(mid_pil, (onset_pil.width + 5, 0))
+        gif_progression.paste(apex_pil, (onset_pil.width + mid_pil.width + 10, 0))
+    else:
+        gif_progression = Image.fromarray(frame_apex if frame_apex is not None else gif_frames[-1])
+
+    # Load apex image
+    apex_img = Image.open(str(apex_img_path))
+
+    # Load arc plot
+    arc_img = Image.open(str(arc_img_path))
+
+    # Create PDF figure with GridSpec (title + 2x2 content + footer)
+    fig = plt.figure(figsize=(16, 14), dpi=100, facecolor='white')
+    gs = gridspec.GridSpec(4, 2, figure=fig, height_ratios=[0.8, 3, 3, 0.8],
+                          hspace=0.35, wspace=0.25, top=0.95, bottom=0.05)
+
+    # ─── Title Section ───
+    ax_title = fig.add_subplot(gs[0, :])
+    ax_title.axis('off')
+    ax_title.set_xlim(0, 10)
+    ax_title.set_ylim(0, 2)
+
+    # Add colored background bar
+    title_bar = Rectangle((0, 0), 10, 2, facecolor='#2c3e50', edgecolor='none', zorder=0)
+    ax_title.add_patch(title_bar)
+
+    # Title text
+    title_text = f"Facial Expression Analysis: {dataset_name}/{video_stem}"
+    ax_title.text(5, 1.4, title_text, fontsize=18, fontweight='bold', color='white',
+                 ha='center', va='center', family='sans-serif')
+
+    # Subtitle with frame info
+    subtitle = f"Apex Frame: #{apex_idx} / {n_frames}  |  Expression Intensity: {apex_motion:.1f}"
+    ax_title.text(5, 0.5, subtitle, fontsize=12, color='#ecf0f1', ha='center', va='center',
+                 family='monospace', style='italic')
+
+    # ─── GIF Progression (onset → apex) ───
+    ax1 = fig.add_subplot(gs[1, 0])
+    ax1.imshow(gif_progression)
+    ax1.set_title('① GIF Progression: Onset → Mid → Apex', fontsize=13, fontweight='bold',
+                 loc='left', pad=10, color='#2c3e50')
+    ax1.axis('off')
+
+    # ─── Apex Image with Motion Vectors ───
+    ax2 = fig.add_subplot(gs[1, 1])
+    ax2.imshow(apex_img)
+    ax2.set_title('② Expression Motion Vectors (Frame 0 → Apex)', fontsize=13, fontweight='bold',
+                 loc='left', pad=10, color='#2c3e50')
+    ax2.axis('off')
+
+    # ─── Arc Plot (spans both columns) ───
+    ax3 = fig.add_subplot(gs[2, :])
+    ax3.imshow(arc_img)
+    ax3.set_title('③ Expression Arc: Motion Magnitude Over Time', fontsize=13, fontweight='bold',
+                 loc='left', pad=10, color='#2c3e50')
+    ax3.axis('off')
+
+    # ─── Footer Section ───
+    ax_footer = fig.add_subplot(gs[3, :])
+    ax_footer.axis('off')
+    ax_footer.set_xlim(0, 10)
+    ax_footer.set_ylim(0, 2)
+
+    # Footer bar
+    footer_bar = Rectangle((0, 0), 10, 2, facecolor='#ecf0f1', edgecolor='#bdc3c7', linewidth=2, zorder=0)
+    ax_footer.add_patch(footer_bar)
+
+    # Footer text
+    footer_text = ("Raw Facial Landmark Tracking Pipeline  |  106-point Landmark Detection with Head Stabilization  |  "
+                  "Optical Flow based on Expression")
+    ax_footer.text(5, 1.3, footer_text, fontsize=10, color='#2c3e50', ha='center', va='center',
+                  family='sans-serif', wrap=True)
+
+    date_text = f"Generated: {np.datetime64('today')}"
+    ax_footer.text(5, 0.4, date_text, fontsize=9, color='#7f8c8d', ha='center', va='center',
+                  family='monospace', style='italic')
+
+    # Save PDF
+    output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(str(output_pdf_path), format='pdf', bbox_inches='tight', dpi=100, facecolor='white')
+    plt.close()
+    print(f"[INFO] Saved summary PDF → {output_pdf_path}")
 
 
 class Normalize:
@@ -492,16 +821,43 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
     apex_idx = int(np.argmax(motion))
     print(f"[INFO] Apex frame: {apex_idx} (expression motion={motion[apex_idx]:.1f})")
 
+    # Create expression arc plot (motion magnitude over time)
+    arc_dir = output_root / "landmarks_raw_apex"
+    arc_dir.mkdir(parents=True, exist_ok=True)
+    arc_path = arc_dir / f"{dataset_name}_{video_stem}_arc.png"
+    create_expression_arc_plot(motion, apex_idx, arc_path)
+
     # Create apex visualization with arrows (baseline → apex, stabilized)
+    apex_path = None
+    apex_key_path = None
     if apex_idx > 0 and stabilized_landmarks_sequence[0] is not None and stabilized_landmarks_sequence[apex_idx] is not None:
         apex_dir = output_root / "landmarks_raw_apex"
         apex_dir.mkdir(parents=True, exist_ok=True)
+
+        # Full 106 landmarks version
         apex_path = apex_dir / f"{dataset_name}_{video_stem}_apex.png"
         create_apex_visualization(frames[apex_idx], stabilized_landmarks_sequence[0],
                                  stabilized_landmarks_sequence[apex_idx],
                                  apex_idx, apex_path)
+
+        # Key landmarks only version
+        apex_key_path = apex_dir / f"{dataset_name}_{video_stem}_apex_key.png"
+        create_apex_visualization_key(frames[apex_idx], stabilized_landmarks_sequence[0],
+                                     stabilized_landmarks_sequence[apex_idx],
+                                     apex_idx, apex_key_path)
     else:
         print(f"[WARN] Could not create apex visualization (invalid stabilized landmarks at frame 0 or {apex_idx})")
+
+    # Create summary PDF (2x2 grid: GIF, Apex, Arc)
+    if apex_path is not None and arc_path.exists():
+        pdf_dir = output_root / "landmarks_raw_apex"
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = pdf_dir / f"{dataset_name}_{video_stem}_summary.pdf"
+        create_summary_pdf(gif_path, apex_path, arc_path, pdf_path, apex_idx,
+                          dataset_name=dataset_name, video_stem=video_stem,
+                          n_frames=n_frames, apex_motion=motion[apex_idx])
+    else:
+        print(f"[WARN] Could not create summary PDF (missing apex image or arc plot)")
 
     # Save NPZ
     npz_dir = output_root / "landmarks_raw_npz"
