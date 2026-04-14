@@ -212,7 +212,7 @@ ORIS Vector Project.
 
 ## Contact
 
-For questions or issues, contact: thomas.quettier@example.com
+For questions or issues, contact: research@tcjq.eu
 
 ---
 
