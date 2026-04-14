@@ -21,7 +21,7 @@ This pipeline processes facial expression videos to extract optical flow vectors
 
 ```bash
 # Navigate to project directory
-cd path/to/04.COMPUTATIONAL
+cd path/to/facial-optical-flow-pipeline
 
 # Create conda environment
 conda env create -f environment.yml
@@ -47,9 +47,20 @@ The script automatically finds all videos recursively.
 
 ### 3. Run Pipeline
 
+**Dense Optical Flow (default):**
 ```bash
 python scripts/face_of_pipeline.py
 ```
+
+**Landmark-Based Tracking (alternative):**
+```bash
+python scripts/face_of_landmarks_pipeline.py
+```
+
+This tracks specific anatomical landmarks instead of pixel-level motion:
+- Both eye centers
+- Both mouth corners (modiolus angoli oris)
+
 
 ### 4. Check Output
 
@@ -201,6 +212,47 @@ See `METHODOLOGY.html` for detailed step-by-step explanation of:
 ## License
 
 This project is provided for research purposes.
+
+## Landmark Tracking Pipeline
+
+**Alternative approach:** Instead of computing dense pixel-level optical flow, track specific anatomical landmarks:
+
+### Landmarks Tracked
+- **Left Eye Center** — left iris center
+- **Right Eye Center** — right iris center  
+- **Left Mouth Corner** — modiolus angoli oris (left)
+- **Right Mouth Corner** — modiolus angoli oris (right)
+
+### Usage
+```bash
+python scripts/face_of_landmarks_pipeline.py
+```
+
+### Output
+Saves landmark trajectories as NPZ files with:
+- `left_eye_center` — (T, 2) array of left eye positions
+- `right_eye_center` — (T, 2) array of right eye positions
+- `left_mouth_corner` — (T, 2) array of left mouth corner positions
+- `right_mouth_corner` — (T, 2) array of right mouth corner positions
+- `frames` — standardized face frames (T, 256, 256, 3)
+- `motion_all` — total landmark displacement per frame
+
+### Loading Landmark Data
+```python
+import numpy as np
+
+data = np.load("output/landmark_tracks_npz/ADFES_F01-Joy-Face Forward.npz")
+
+# Access landmark tracks
+left_eye = data["left_eye_center"]          # shape: (T, 2) — [x, y] per frame
+right_eye = data["right_eye_center"]        # shape: (T, 2)
+left_mouth = data["left_mouth_corner"]      # shape: (T, 2)
+right_mouth = data["right_mouth_corner"]    # shape: (T, 2)
+
+# Compute displacement from frame 0
+displacement = left_eye - left_eye[0]
+speed = np.linalg.norm(displacement, axis=1)  # speed per frame
+```
 
 ## Citation
 
