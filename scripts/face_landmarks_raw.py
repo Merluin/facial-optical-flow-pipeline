@@ -103,11 +103,20 @@ def load_video(path: Path) -> tuple[list[np.ndarray], float]:
     return frames, fps
 
 
+# Printed once to help diagnose which landmark attributes the model exposes
+_face_debug_printed = False
+
+
 def detect_and_estimate_landmarks(frame_bgr: np.ndarray, face_analyzer) -> tuple[tuple[int, int, int, int] | None, dict[str, np.ndarray]]:
     """
     Detect face and estimate 106 landmarks using insightface.
     Returns (bbox, landmarks_dict).
+
+    insightface Face is a dict subclass, so use dict.get() to safely access
+    optional keys — getattr with a default does NOT work because __getattr__
+    raises KeyError (not AttributeError) on missing keys.
     """
+    global _face_debug_printed
     landmarks = {}
     bbox = None
 
@@ -117,20 +126,26 @@ def detect_and_estimate_landmarks(frame_bgr: np.ndarray, face_analyzer) -> tuple
         # Use first (largest) face
         face = faces[0]
 
-        # Get bbox in format (x, y, w, h)
-        bbox_orig = face.bbox
-        x1, y1, x2, y2 = [int(v) for v in bbox_orig]
-        w = x2 - x1
-        h = y2 - y1
-        bbox = (x1, y1, w, h)
+        # One-time debug: show every key the model populated
+        if not _face_debug_printed:
+            print(f"[DEBUG] Face object keys: {list(face.keys())}")
+            _face_debug_printed = True
 
-        # Get all 106 landmarks via landmark_2d_106 (not face.kps which is 5-point)
-        lm106 = getattr(face, "landmark_2d_106", None)
+        # bbox (x1, y1, w, h)
+        x1, y1, x2, y2 = [int(v) for v in face.bbox]
+        bbox = (x1, y1, x2 - x1, y2 - y1)
+
+        # 106-point landmarks — buffalo_l runs 2d106det which sets this key
+        # Use dict .get() because face is a dict subclass; getattr would KeyError
+        lm106 = face.get("landmark_2d_106")
+
         if lm106 is not None and len(lm106) == N_LANDMARKS:
             for i, kp in enumerate(lm106):
                 landmarks[f"landmark_{i}"] = np.array(kp, dtype=np.float32)
         else:
-            # Fallback: insightface model doesn't expose landmark_2d_106
+            print(f"[WARN] landmark_2d_106 not available "
+                  f"(got {None if lm106 is None else len(lm106)} points). "
+                  f"Check [DEBUG] line above for available keys.")
             for name in LANDMARKS:
                 landmarks[name] = None
     else:
