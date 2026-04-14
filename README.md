@@ -72,7 +72,7 @@ Edit `scripts/face_of_pipeline.py` top section:
 ```python
 # Face normalization
 CROP_SIZE       = 256        # output face square (pixels)
-PAD_FACTOR      = 0.1        # padding around face (0.0-1.0)
+PAD_FACTOR      = 0.35       # padding around face (0.0-1.0)
 
 # Apex segmentation
 APEX_WINDOW_BEFORE = 40      # frames before apex

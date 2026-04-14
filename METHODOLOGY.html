@@ -335,7 +335,7 @@ bbox_padded = bbox_rotated + padding (all sides)
             </div>
             <p>
                 After rotation, recompute the bbox in rotated space. Add symmetric padding
-                (default <code>PAD_FACTOR=0.1</code>) to include neck, some hair. Adjust for better face isolation.
+                (default <code>PAD_FACTOR=0.35</code>) to include neck, some hair. Adjust for better face isolation.
             </p>
             <h4>C) Square Crop</h4>
             <div class="formula">
@@ -699,9 +699,9 @@ output/flow_visualization_gif/ADFES_F01-Joy-Face Forward.gif
             </tr>
             <tr>
                 <td><code>PAD_FACTOR</code></td>
-                <td>0.1</td>
+                <td>0.35</td>
                 <td>0.0-0.5</td>
-                <td>Padding around face bbox. Lower = tighter crop (try 0.05-0.15 if shoulders appear in OF)</td>
+                <td>Padding around face bbox. Lower = tighter crop (try 0.2-0.3 if shoulders appear in OF)</td>
             </tr>
             <tr>
                 <td><code>APEX_WINDOW_BEFORE</code></td>

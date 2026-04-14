@@ -6,12 +6,14 @@ Batch processor for multiple video datasets
 Steps (per video):
   1. Load video frames
   2. Detect face using OpenCV Haar cascade
-  3. Standardise face position (align, crop to square)
-  4. Detect the expression apex frame (max motion from neutral)
-  5. Segment a fixed window around the apex
-  6. Apply dense Farneback optical flow on the segment
-  7. Save flow vectors to NPZ
-  8. Export a GIF with colour-wheel + arrow visualisation
+  3a. Smooth bounding boxes (temporal stability)
+  3b. Standardise face position (align, crop) + affine registration to frame 0
+  4. Create circular face mask (optional)
+  5. Detect the expression apex frame (max motion from neutral)
+  6. Segment a fixed window around the apex
+  7. Apply dense Farneback optical flow on the segment
+  8. Save flow vectors to NPZ
+  9. Export a GIF with colour-wheel + arrow visualisation
 
 Usage (from project root, with face_of conda env active):
     python scripts/face_of_pipeline.py
@@ -27,6 +29,7 @@ Output structure:
         ├── ADFES_video2_name.gif
         └── JeFEE_video1_name.gif
 """
+#conda activate face_of 
 
 import math
 import sys
@@ -200,8 +203,8 @@ def smooth_bboxes(bboxes: list[tuple], kernel_size: int = 5) -> list[tuple]:
 
 
 def register_to_reference(frame_bgr: np.ndarray, bbox: tuple[int, int, int, int],
-                          ref_keypoints: np.ndarray, crop_size: int,
-                          pad_factor: float) -> np.ndarray:
+                          ref_keypoints: np.ndarray, ref_bbox: tuple[int, int, int, int],
+                          crop_size: int, pad_factor: float) -> np.ndarray:
     """
     Register frame to reference by computing affine transform from current keypoints
     to reference keypoints. This removes rigid head motion.
@@ -218,8 +221,8 @@ def register_to_reference(frame_bgr: np.ndarray, bbox: tuple[int, int, int, int]
                             flags=cv2.INTER_LINEAR,
                             borderMode=cv2.BORDER_REFLECT_101)
 
-    # Get reference bbox (from first frame)
-    ref_x, ref_y, ref_w, ref_h = bbox
+    # Crop around the reference frame's fixed position
+    ref_x, ref_y, ref_w, ref_h = ref_bbox
 
     # --- crop around reference position ---
     pad = pad_factor * max(ref_w, ref_h)
@@ -399,7 +402,7 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
     # Register all other frames to the reference
     for i in range(1, n_frames):
         frame_registered = register_to_reference(
-            frames_raw[i], filled_bbox[i], ref_keypoints, CROP_SIZE, PAD_FACTOR
+            frames_raw[i], filled_bbox[i], ref_keypoints, ref_bbox, CROP_SIZE, PAD_FACTOR
         )
         std_frames.append(frame_registered)
 
