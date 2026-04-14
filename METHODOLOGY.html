@@ -201,8 +201,8 @@
 <body>
     <div class="container">
         <header>
-            <h1>Facial Expression Optical Flow Pipeline</h1>
-            <p class="subtitle">A Comprehensive Methodology for Analyzing Facial Expression Motion in Video</p>
+            <h1>Facial Expression Landmark Tracking Pipeline</h1>
+            <p class="subtitle">A Comprehensive Methodology for Analyzing Facial Expression using 106-Point Landmark Tracking</p>
             <p style="margin-top: 20px; color: #7f8c8d;">ORIS Vector Project | April 2026</p>
         </header>
 
@@ -215,11 +215,11 @@
                 <li><a href="#step2">Step 2: Face Detection</a></li>
                 <li><a href="#step3">Step 3: Face Standardization</a></li>
                 <li><a href="#step4">Step 4: Bbox Smoothing & Affine Registration</a></li>
-                <li><a href="#step5">Step 5: Apex Detection</a></li>
-                <li><a href="#step6">Step 6: Asymmetric Segmentation</a></li>
-                <li><a href="#step7">Step 7: Face Masking</a></li>
-                <li><a href="#step8">Step 8: Dense Optical Flow</a></li>
-                <li><a href="#step9">Step 9: Output & Visualization</a></li>
+                <li><a href="#step5">Step 5: Landmark Detection</a></li>
+                <li><a href="#step6">Step 6: Apex Detection</a></li>
+                <li><a href="#step7">Step 7: Asymmetric Segmentation</a></li>
+                <li><a href="#step8">Step 8: Save NPZ Data</a></li>
+                <li><a href="#step9">Step 9: GIF Visualization</a></li>
                 <li><a href="#parameters">Configuration Parameters</a></li>
                 <li><a href="#output-format">Output File Format</a></li>
                 <li><a href="#references">References</a></li>
@@ -228,15 +228,15 @@
 
         <h2 id="overview">Overview & Goals</h2>
         <p>
-            This pipeline processes videos of facial expressions to extract <span class="highlight">optical flow vectors</span>
-            that capture the motion and deformation of facial muscles during emotional expression. The primary goals are:
+            This pipeline processes videos of facial expressions to track <span class="highlight">106 facial landmarks</span>
+            that capture the motion and deformation of facial features during emotional expression. The primary goals are:
         </p>
         <ul style="margin: 15px 0 15px 30px;">
             <li><strong>Face Standardization</strong>: Align all faces to a canonical reference frame (center, size, rotation)</li>
-            <li><strong>Expression Apex Detection</strong>: Identify the frame of maximum emotional intensity using motion cues</li>
+            <li><strong>Expression Apex Detection</strong>: Identify the frame of maximum emotional intensity using landmark motion cues</li>
             <li><strong>Temporal Segmentation</strong>: Extract a focused window around the apex (onset → peak → decay)</li>
-            <li><strong>Motion Quantification</strong>: Compute dense optical flow to measure pixel-level facial deformation</li>
-            <li><strong>Data Export</strong>: Save flow vectors in compact format (NPZ) with visualization (GIF)</li>
+            <li><strong>Landmark Tracking</strong>: Detect 106 facial landmarks using insightface ML model</li>
+            <li><strong>Data Export</strong>: Save landmark trajectories in compact format (NPZ) with motion visualization (GIF)</li>
         </ul>
 
         <h2 id="architecture">Pipeline Architecture</h2>
@@ -252,17 +252,17 @@ Smoothed Bboxes (temporal stability)
 Standardized Face Frames (256×256, centered)
     ↓ (Register to frame 0)
 Registered Face Frames (rigid motion removed)
-    ↓ (Compute motion)
+    ↓ (Detect 106 landmarks)
+Landmark Trajectories (per frame)
+    ↓ (Compute motion from landmarks)
 Motion Signal (per-frame magnitude)
     ↓ (Find apex)
 Apex Frame Index
     ↓ (Segment: apex-40 to apex+5)
-Segmented Frames (45 frames total)
-    ↓ (Apply mask, compute OF)
-Optical Flow Arrays (44 flow maps)
+Segmented Frames & Landmarks (45 frames total)
     ↓
-    ├→ NPZ File (flow + metadata)
-    └→ GIF Animation (visualization)
+    ├→ NPZ File (landmark trajectories + metadata)
+    └→ GIF Animation (landmark visualization)
         </div>
 
         <h2 id="step1">Step 1: Video Loading & Frame Extraction</h2>
@@ -419,30 +419,64 @@ output = cv2.resize(crop_region, (256, 256))
             </ul>
         </div>
 
-        <h2 id="step5">Step 5: Apex Detection (Peak Expression Frame)</h2>
+        <h2 id="step5">Step 5: Landmark Detection (106-Point Facial Analysis)</h2>
         <div class="step">
-            <div><span class="step-number">5</span><span class="step-title">Find the Frame of Maximum Expression Intensity</span></div>
+            <div><span class="step-number">5</span><span class="step-title">Detect 106 Facial Landmarks Using insightface</span></div>
             <p style="margin-top: 15px;">
-                Detect which frame represents the peak ("apex") of the facial expression.
+                Detect all 106 facial landmarks on each standardized and registered face frame using insightface's pre-trained ML model.
             </p>
-            <h3>Algorithm: Optical Flow-Based Motion Detection</h3>
+            <h3>Algorithm: insightface FaceAnalysis</h3>
             <p>
-                For each frame <em>i</em>, compute the optical flow from frame 0 (neutral reference) to frame <em>i</em>.
-                The apex is the frame with maximum total motion magnitude.
+                Use insightface's buffalo_l model to detect facial landmarks. This model outputs a (106, 2) array
+                of [x, y] coordinates for each face, covering eyes, eyebrows, nose, mouth, and jawline.
+            </p>
+            <div class="formula">
+FOR each standardized frame i:
+    faces = face_analyzer.get(frame_i)
+    IF faces:
+        landmarks[i] = faces[0].kps  # Shape: (106, 2)
+    ELSE:
+        landmarks[i] = None
+            </div>
+            <h3>Landmark Coverage:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>Eyes</strong>: pupils, inner/outer corners (8 landmarks)</li>
+                <li><strong>Eyebrows</strong>: inner, center, outer points (8 landmarks)</li>
+                <li><strong>Nose</strong>: bridge, tip, nostrils (9 landmarks)</li>
+                <li><strong>Mouth</strong>: corners, inner/outer lip contours (42 landmarks)</li>
+                <li><strong>Face contour</strong>: jawline and cheek points (31 landmarks)</li>
+            </ul>
+            <h3>Output:</h3>
+            <ul style="margin: 10px 0 10px 30px;">
+                <li><strong>landmarks_sequence</strong>: List of (106, 2) arrays, one per frame</li>
+                <li>Coordinates in standardized frame space (0 to CROP_SIZE)</li>
+            </ul>
+        </div>
+
+        <h2 id="step6">Step 6: Apex Detection (Landmark-Based Motion)</h2>
+        <div class="step">
+            <div><span class="step-number">6</span><span class="step-title">Find the Frame of Maximum Expression Intensity Using Landmark Motion</span></div>
+            <p style="margin-top: 15px;">
+                Compute landmark motion magnitude for each frame and identify the apex as the frame with maximum motion.
+            </p>
+            <h3>Algorithm: Sum of Landmark Displacements</h3>
+            <p>
+                For each frame <em>i</em>, compute the total displacement of all 106 landmarks from frame 0 (reference).
+                The apex is the frame with maximum summed displacement.
             </p>
             <div class="formula">
 FOR each frame i in 1..N-1:
-    flow_i = calcOpticalFlowFarneback(gray_frame_0, gray_frame_i)
-    motion[i] = sum of ||flow_i|| per pixel
+    displacement[i] = sum of ||landmarks[i] - landmarks[0]|| for all 106 landmarks
+    motion[i] = displacement[i]
 
 apex_global = argmax(motion[1..N])
             </div>
             <h3>Rationale:</h3>
             <ul style="margin: 10px 0 10px 30px;">
-                <li>During expression buildup (onset), pixels move gradually</li>
-                <li>At peak (apex), facial deformation is maximum, so motion is maximum</li>
-                <li>During recovery (offset), motion decreases</li>
-                <li>Thus, <code>argmax(motion)</code> locates the apex</li>
+                <li>During expression buildup (onset), landmarks move gradually from neutral position</li>
+                <li>At peak (apex), all landmarks have maximum displacement from neutral, so motion is maximum</li>
+                <li>During recovery (offset), landmarks move back toward neutral, motion decreases</li>
+                <li>Thus, <code>argmax(motion)</code> robustly locates the apex</li>
             </ul>
             <h3>Output:</h3>
             <ul style="margin: 10px 0 10px 30px;">
@@ -455,9 +489,9 @@ apex_global = argmax(motion[1..N])
             </div>
         </div>
 
-        <h2 id="step6">Step 6: Asymmetric Segmentation Around Apex</h2>
+        <h2 id="step7">Step 7: Asymmetric Segmentation Around Apex</h2>
         <div class="step">
-            <div><span class="step-number">6</span><span class="step-title">Extract Video Segment: Onset → Apex → Offset</span></div>
+            <div><span class="step-number">7</span><span class="step-title">Extract Video Segment: Onset → Apex → Offset</span></div>
             <p style="margin-top: 15px;">
                 Extract a focused window around the apex that captures the full expression arc.
             </p>
@@ -494,199 +528,97 @@ seg_frames = std_frames[seg_start : seg_end]
             </div>
         </div>
 
-        <h2 id="step7">Step 7: Face Masking (Optional)</h2>
+        <h2 id="step8">Step 8: Save Landmark Trajectories to NPZ</h2>
         <div class="step">
-            <div><span class="step-number">7</span><span class="step-title">Isolate Facial Motion (Optional)</span></div>
+            <div><span class="step-number">8</span><span class="step-title">Export Segmented Data to Compressed NumPy Format</span></div>
             <p style="margin-top: 15px;">
-                Optionally create an elliptical (oval) mask to isolate optical flow computation to the face region only,
-                excluding shoulders, neck, and background. The ellipse shape better frames the face proportions.
+                Save the segmented frames, landmark trajectories, and metadata to a compressed NPZ (NumPy) archive.
             </p>
-            <h3>Configuration:</h3>
-            <div class="parameter">
-USE_FACE_MASK = True
-FACE_MASK_SIZE = 0.85  # 85% of frame size (0.0-1.0)
-            </div>
-            <h3>Mask Generation:</h3>
-            <div class="formula">
-center = (CROP_SIZE/2, CROP_SIZE/2)
-axes_x = (CROP_SIZE / 2) × FACE_MASK_SIZE × 0.9  # narrower (90%)
-axes_y = (CROP_SIZE / 2) × FACE_MASK_SIZE        # taller (100%)
-mask = cv2.ellipse(zeros(CROP_SIZE, CROP_SIZE), center, (axes_x, axes_y), 255, -1)
-            </div>
-            <p>
-                Create a binary elliptical mask (0 outside, 255 inside) at the center of the 256×256 crop.
-                The ellipse is taller than wide (90% horizontal, 100% vertical) to match face proportions and better frame facial features.
-            </p>
-            <h3>Application to Optical Flow:</h3>
-            <div class="formula">
-gray_masked = cv2.bitwise_and(gray_frame, gray_frame, mask=mask)
-flow = calcOpticalFlowFarneback(gray_masked_prev, gray_masked_curr, ...)
-            </div>
-            <p>
-                Apply the mask to grayscale frames before optical flow computation.
-                Masked-out regions become black (0 intensity), so no flow is computed there.
-            </p>
-            <h3>Output:</h3>
+            <h3>NPZ Contents:</h3>
             <ul style="margin: 10px 0 10px 30px;">
-                <li>Flow vectors are computed only within the mask region</li>
-                <li>Visualization shows an orange circle marking the mask boundary</li>
+                <li><code>frames</code> — standardized face frames (T, 256, 256, 3), uint8 BGR</li>
+                <li><code>landmark_0</code> through <code>landmark_105</code> — (T, 2) float32 arrays of [x, y] coordinates</li>
+                <li><code>apex_local</code> — apex frame index within segment (int32)</li>
+                <li><code>apex_global</code> — apex frame index in full video (int32)</li>
+                <li><code>seg_start</code>, <code>seg_end</code> — segment boundaries in full video (int32)</li>
+                <li><code>fps</code> — video frame rate (float32)</li>
+                <li><code>motion_all</code> — landmark motion magnitude per frame (float32 array)</li>
             </ul>
-            <h3>Adjustment:</h3>
-            <ul style="margin: 10px 0 10px 30px;">
-                <li><code>FACE_MASK_SIZE = 0.9</code>: Larger, includes more jaw/cheeks</li>
-                <li><code>FACE_MASK_SIZE = 0.85</code>: Balanced (default)</li>
-                <li><code>FACE_MASK_SIZE = 0.7</code>: Tight, only central face</li>
-            </ul>
+            <h3>File Naming:</h3>
+            <div class="formula">
+output/landmark_npz/{DATASET}_{VIDEO_STEM}.npz
+
+Example:
+  output/landmark_npz/ADFES_F01-Joy-Face Forward.npz
+  output/landmark_npz/JeFEE_JF1_Happiness.npz
+            </div>
             <div class="note">
-                <strong>💡 Tip:</strong> Disable masking (<code>USE_FACE_MASK = False</code>) if you want to see
-                full-frame motion. Use masking to isolate facial deformation.
+                <strong>💡 Note:</strong> Files are compressed with numpy's savez_compressed(),
+                reducing file size by ~70% compared to uncompressed formats.
             </div>
         </div>
 
-        <h2 id="step8">Step 8: Dense Optical Flow (Farneback Algorithm)</h2>
+        <h2 id="step9">Step 9: GIF Visualization</h2>
         <div class="step">
-            <div><span class="step-number">8</span><span class="step-title">Compute Dense Optical Flow</span></div>
+            <div><span class="step-number">9</span><span class="step-title">Export Animated GIF with Landmark Motion</span></div>
             <p style="margin-top: 15px;">
-                Compute dense optical flow on consecutive frames within the segment.
-                Optical flow estimates the motion vector at every pixel.
+                Create an animated GIF visualization showing all 106 landmarks with motion trails and color coding.
             </p>
-            <h3>Algorithm: Farneback</h3>
-            <p>
-                OpenCV's <code>calcOpticalFlowFarneback</code> computes dense optical flow using
-                polynomial expansion approximation (Farneback 2003).
-            </p>
-            <h3>Computation:</h3>
-            <div class="formula">
-FOR each consecutive frame pair (i, i+1) in segment:
-    prev_gray = cvtColor(seg_frames[i], BGR2GRAY)
-    curr_gray = cvtColor(seg_frames[i+1], BGR2GRAY)
-
-    IF USE_FACE_MASK:
-        prev_gray = bitwise_and(prev_gray, prev_gray, mask=mask)
-        curr_gray = bitwise_and(curr_gray, curr_gray, mask=mask)
-
-    flow = calcOpticalFlowFarneback(
-        prev_gray, curr_gray, None,
-        pyr_scale=0.5,      # pyramid scale
-        levels=3,           # pyramid levels
-        winsize=15,         # averaging window
-        iterations=3,       # iterations per level
-        poly_n=5,          # polynomial size
-        poly_sigma=1.2,    # Gaussian std
-        flags=0
-    )
-
-    flows.append(flow)  # shape (256, 256, 2)
-            </div>
-            <h3>Output Shape:</h3>
+            <h3>Rendering Process:</h3>
+            <h4>A) For each frame in segment:</h4>
             <ul style="margin: 10px 0 10px 30px;">
-                <li>Each flow: (H, W, 2) = (256, 256, 2)</li>
-                <li>flow[y, x, 0] = horizontal motion (dx)</li>
-                <li>flow[y, x, 1] = vertical motion (dy)</li>
-                <li>Total T-1 flow arrays for T-frame segment</li>
+                <li>Start with standardized face frame</li>
+                <li>Draw 106 colored circles (one per landmark)</li>
+                <li>Draw fading trails showing previous positions (last TRAIL_LENGTH frames)</li>
+                <li>Annotate with frame counter and apex marker</li>
             </ul>
-            <h3>Interpretation:</h3>
+            <h4>B) Landmark Colors:</h4>
+            <div class="formula">
+colors = [
+    (255, 0, 0),    # Blue
+    (0, 255, 0),    # Green
+    (0, 0, 255),    # Red
+    (255, 255, 0),  # Cyan
+    (255, 0, 255),  # Magenta
+    (0, 255, 255)   # Yellow
+]
+
+color[landmark_idx] = colors[landmark_idx % 6]
+            </div>
+            <p>Landmarks cycle through 6 distinct hues for visibility.</p>
+            <h4>C) Motion Trails:</h4>
+            <div class="formula">
+FOR each landmark in frame i:
+    FOR each previous frame j in (i-TRAIL_LENGTH .. i-1):
+        alpha = (j - trail_start) / (i - trail_start)  # fade factor
+        draw faded circle at earlier landmark position
+            </div>
+            <h4>D) Annotations:</h4>
             <ul style="margin: 10px 0 10px 30px;">
-                <li><strong>Magnitude</strong>: <code>√(dx² + dy²)</code> = motion speed (pixels/frame)</li>
-                <li><strong>Direction</strong>: <code>atan2(dy, dx)</code> = motion angle</li>
-                <li><strong>Zero flow</strong>: Static regions (no motion)</li>
-                <li><strong>Large flow</strong>: Fast deformation (mouth, eyebrows, cheeks)</li>
+                <li><strong>Frame counter</strong> (bottom-left): segment frame index</li>
+                <li><strong>"APEX" label</strong>: marks frames near the apex</li>
             </ul>
-            <div class="note">
-                <strong>💡 Parameters:</strong> These are tuned for 256×256 face crops at 25 fps.
-                Adjust <code>winsize</code> if flow appears too noisy or over-smoothed.
-            </div>
-        </div>
+            <h3>Export:</h3>
+            <div class="formula">
+gif_fps = fps × GIF_SPEED
 
-        <h2 id="step9">Step 9: Output & Visualization</h2>
-        <div class="step">
-            <div><span class="step-number">9</span><span class="step-title">Save Data and Create Visualization</span></div>
-            <p style="margin-top: 15px;">
-                Save optical flow data to disk in two formats: (1) compact NPZ for analysis,
-                (2) animated GIF for visual inspection.
-            </p>
-            <h3>Output 1: NPZ File (Compressed NumPy Archive)</h3>
-            <div class="formula">
-np.savez_compressed(
-    "output/optical_flow_npz/DATASET_VIDEONAME.npz",
-    flow = stack(flows),              # (T-1, 256, 256, 2)
-    frames = stack(seg_frames),       # (T, 256, 256, 3)
-    apex_local = apex_local,
-    apex_global = apex_global,
-    seg_start = seg_start,
-    seg_end = seg_end,
-    fps = fps,
-    motion_all = motion_array,        # (N,)
-    face_mask_used = USE_FACE_MASK,
-    face_mask_size = FACE_MASK_SIZE
-)
-            </div>
-            <p>
-                Compact binary format, ~5-10 MB per video. Includes all flow data + metadata.
-                Load in Python: <code>data = np.load("file.npz"); flow = data["flow"]</code>
-            </p>
-            <h3>Output 2: GIF Animation (Visualization)</h3>
-            <p>For each flow frame, render a visual representation:</p>
-            <h4>A) Convert Flow to Color (HSV Colour Wheel)</h4>
-            <div class="formula">
-magnitude = sqrt(dx² + dy²)
-angle = atan2(dy, dx)  # -π .. π
-
-hue = (angle + π) / (2π) × 179     # direction → hue
-saturation = 255                    # always saturated
-value = magnitude / max_magnitude × 255  # speed → brightness
-
-hsv = stack([hue, saturation, value])
-color_map = cvtColor(hsv, HSV2BGR)
-            </div>
-            <p>
-                Red/yellow: rightward motion. Blue/cyan: leftward motion.
-                Bright: fast motion. Dark: slow motion.
-            </p>
-            <h4>B) Overlay Arrows</h4>
-            <div class="formula">
-FOR each (y, x) in grid(step=ARROW_STEP):
-    dx, dy = flow[y, x, :]
-    end_x = x + dx × ARROW_SCALE
-    end_y = y + dy × ARROW_SCALE
-    cv2.arrowedLine(frame, (x,y), (end_x,end_y), white, thickness=1)
-            </div>
-            <p>Draw white arrows on a regular grid (spacing = ARROW_STEP pixels) scaled by ARROW_SCALE.</p>
-            <h4>C) Apply Mask & Draw Boundary (if enabled)</h4>
-            <div class="formula">
-# Black out background outside mask
-mask_inv = bitwise_not(mask)
-frame = copyTo(frame, mask) + copyTo(black, mask_inv)
-
-# Draw oval boundary
-cv2.ellipse(frame, center=(128,128), axes=(axes_x, axes_y), color=orange, thickness=2)
-            </div>
-            <p>Background outside the ellipse is blacked out for focus. Orange oval boundary marks the mask region.</p>
-            <h4>D) Annotate Frame</h4>
-            <ul style="margin: 10px 0 10px 30px;">
-                <li>Frame counter (bottom-left): global frame index</li>
-                <li>"APEX" label: marks frames near apex</li>
-                <li>"MASK" label: if masking enabled</li>
-            </ul>
-            <h4>E) Create GIF</h4>
-            <div class="formula">
 imageio.mimsave(
-    "output/flow_visualization_gif/DATASET_VIDEONAME.gif",
+    "output/landmark_gif/DATASET_VIDEONAME.gif",
     gif_frames,
-    fps = fps × GIF_SPEED,
+    fps = gif_fps,
     loop = 0  # infinite loop
 )
             </div>
             <p>
-                Export as animated GIF at reduced speed (default <code>GIF_SPEED=0.5</code>).
-                Open in browser or image viewer to inspect flow patterns.
+                Export as animated GIF at reduced speed (default <code>GIF_SPEED=0.5</code>, half real-time).
+                Adjust GIF_SPEED to 0.25 for slower playback or 1.0 for real-time.
             </p>
-            <h3>File Naming Convention:</h3>
+            <h3>File Output:</h3>
             <div class="parameter">
-output/optical_flow_npz/ADFES_F01-Joy-Face Forward.npz
-output/flow_visualization_gif/ADFES_F01-Joy-Face Forward.gif
+output/landmark_gif/ADFES_F01-Joy-Face Forward.gif
+output/landmark_gif/JeFEE_JF1_Happiness.gif
             </div>
-            <p>Format: <code>&lt;DATASET&gt;_&lt;VIDEO_STEM&gt;.&lt;ext&gt;</code></p>
+            <p>Format: <code>&lt;DATASET&gt;_&lt;VIDEO_STEM&gt;.gif</code></p>
         </div>
 
         <h2 id="parameters">Configuration Parameters</h2>

@@ -11,4 +11,5 @@ dependencies:
     - numpy
     - imageio[ffmpeg]
     - pillow
-    - mediapipe
+    - insightface
+    - onnxruntime

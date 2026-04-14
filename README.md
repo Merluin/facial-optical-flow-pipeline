@@ -1,19 +1,19 @@
-# Facial Expression Optical Flow Pipeline
+# Facial Expression Landmark Tracking Pipeline
 
-A comprehensive Python pipeline for analyzing facial expressions in video using optical flow. Designed for datasets like ADFES and JeFEE.
+A comprehensive Python pipeline for analyzing facial expressions in video using 106-point landmark tracking. Designed for datasets like ADFES and JeFEE.
 
 ## Overview
 
-This pipeline processes facial expression videos to extract optical flow vectors during the peak of emotional expression. It standardizes face position, detects the expression apex, segments video around the peak, and applies dense optical flow with optional face masking.
+This pipeline processes facial expression videos to track 106 facial landmarks during the peak of emotional expression. It standardizes face position, detects the expression apex, segments video around the peak, and tracks landmark motion throughout the segment.
 
 **Key Features:**
 - ✅ Batch processing of multiple video datasets
 - ✅ Automatic face detection and standardization (rotation + square crop)
 - ✅ Affine registration to remove rigid head motion
-- ✅ Apex detection using optical flow magnitude
+- ✅ 106-point landmark detection using insightface
+- ✅ Apex detection using landmark motion magnitude
 - ✅ Asymmetric segmentation (configurable before/after apex)
-- ✅ Dense Farneback optical flow with optional circular face mask
-- ✅ Multi-format output (NPZ data + animated GIF visualization)
+- ✅ Multi-format output (NPZ landmark trajectories + animated GIF visualization)
 
 ## Quick Start
 
@@ -47,56 +47,70 @@ The script automatically finds all videos recursively.
 
 ### 3. Run Pipeline
 
-**Dense Optical Flow (default):**
+**Full Preprocessing + 106-Point Landmark Tracking (recommended):**
 ```bash
 python scripts/face_of_pipeline.py
 ```
 
-**Landmark-Based Tracking (alternative):**
+This includes:
+- Face detection with Haar cascades
+- Bounding box smoothing
+- Face alignment and cropping
+- Affine registration to remove head motion
+- 106-point landmark detection from insightface
+- Apex detection via landmark motion
+- Asymmetric temporal segmentation
+
+**Alternative: Raw Frame Tracking (no preprocessing):**
 ```bash
-python scripts/face_of_landmarks_pipeline.py
+python scripts/face_landmarks_raw.py
 ```
 
-This tracks specific anatomical landmarks instead of pixel-level motion:
-- Both eye centers
-- Both mouth corners (modiolus angoli oris)
-
+Raw tracking on unprocessed video frames (no face alignment, no motion compensation).
 
 ### 4. Check Output
 
+Full pipeline output:
 ```
 output/
-├── optical_flow_npz/
+├── landmark_npz/
 │   ├── ADFES_F01-Joy-Face Forward.npz
 │   ├── ADFES_F03-Joy-Face Forward.npz
 │   └── ...
-└── flow_visualization_gif/
+└── landmark_gif/
     ├── ADFES_F01-Joy-Face Forward.gif
     ├── ADFES_F03-Joy-Face Forward.gif
     └── ...
 ```
 
+Raw tracking output:
+```
+output/
+├── landmarks_raw_npz/
+│   └── ...
+└── landmarks_raw_gif/
+    └── ...
+```
+
 ## Configuration
 
-Edit `scripts/face_of_pipeline.py` top section:
+Edit `scripts/face_of_pipeline.py` configuration section:
 
 ```python
-# Face normalization
+# Face standardization
 CROP_SIZE       = 256        # output face square (pixels)
-PAD_FACTOR      = 0.35       # padding around face (0.0-1.0)
+PAD_FACTOR      = 0.3        # padding around face (fraction of bbox)
 
 # Apex segmentation
 APEX_WINDOW_BEFORE = 40      # frames before apex
 APEX_WINDOW_AFTER  = 5       # frames after apex
 
-# Face masking for OF
-USE_FACE_MASK   = True       # enable/disable
-FACE_MASK_SIZE  = 0.85       # mask radius (0.0-1.0)
+# Landmark visualization
+LANDMARK_RADIUS = 3          # radius of landmark circles (pixels)
+TRAIL_LENGTH    = 10         # show trail for last N frames
 
-# Visualization
-ARROW_STEP  = 16             # arrow grid spacing (pixels)
-ARROW_SCALE = 5.0            # arrow size multiplier
-GIF_SPEED   = 0.5            # GIF playback speed
+# GIF export
+GIF_SPEED       = 0.5        # fraction of real speed (0.5 = half speed)
 ```
 
 ## Loading Results in Python
@@ -104,56 +118,60 @@ GIF_SPEED   = 0.5            # GIF playback speed
 ```python
 import numpy as np
 
-# Load optical flow data
-data = np.load("output/optical_flow_npz/ADFES_F01-Joy-Face Forward.npz")
+# Load landmark data
+data = np.load("output/landmark_npz/ADFES_F01-Joy-Face Forward.npz")
 
-# Access arrays
-flow = data["flow"]              # shape: (T-1, 256, 256, 2) — [dx, dy]
-frames = data["frames"]          # shape: (T, 256, 256, 3) — BGR
+# Access core data
+frames = data["frames"]              # shape: (T, 256, 256, 3) — standardized face frames (BGR)
 apex_local = int(data["apex_local"])    # frame index within segment
 apex_global = int(data["apex_global"])  # frame index in full video
+seg_start = int(data["seg_start"])      # segment start in full video
+seg_end = int(data["seg_end"])          # segment end in full video
 fps = float(data["fps"])
-motion_all = data["motion_all"]  # motion magnitude per frame
+motion_all = data["motion_all"]     # landmark motion magnitude per frame
 
-# Extract flow components
-u = flow[..., 0]  # horizontal component
-v = flow[..., 1]  # vertical component
-magnitude = np.sqrt(u**2 + v**2)
-angle = np.arctan2(v, u)
+# Access landmark trajectories (106 landmarks, all tracked through segment)
+landmark_0 = data["landmark_0"]     # shape: (T, 2) — [x, y] per frame
+landmark_1 = data["landmark_1"]
+# ... landmark_2 through landmark_105
 
-print(f"Total frames: {len(frames)}")
-print(f"Apex at frame {apex_local} (global {apex_global})")
-print(f"Max flow magnitude: {magnitude.max():.2f} pixels/frame")
+# Example: compute displacement from first frame for a landmark
+disp = landmark_0 - landmark_0[0]  # displacement relative to frame 0
+speed = np.linalg.norm(disp, axis=1)  # speed magnitude per frame
+
+print(f"Total frames in segment: {len(frames)}")
+print(f"Apex at local frame {apex_local} (global {apex_global})")
+print(f"Peak landmark motion: {motion_all.max():.2f} pixels")
+print(f"FPS: {fps:.2f}")
 ```
 
 ## Output File Format
 
-### NPZ (Optical Flow Data)
+### NPZ (Landmark Tracking Data)
 
 Binary compressed NumPy archive containing:
 
 | Variable | Shape | Type | Description |
 |----------|-------|------|-------------|
-| `flow` | (T-1, H, W, 2) | float32 | Dense optical flow, dx/dy components |
-| `frames` | (T, H, W, 3) | uint8 | Standardized face frames (BGR) |
+| `frames` | (T, 256, 256, 3) | uint8 | Standardized face frames (BGR) |
 | `apex_local` | () | int32 | Apex frame index within segment |
 | `apex_global` | () | int32 | Apex frame index in full video |
 | `seg_start` | () | int32 | Segment start frame (full video) |
 | `seg_end` | () | int32 | Segment end frame (full video) |
 | `fps` | () | float32 | Video FPS |
-| `motion_all` | (N,) | float32 | Motion magnitude per frame (full video) |
-| `face_mask_used` | () | bool | Whether mask was applied |
-| `face_mask_size` | () | float32 | Mask radius fraction |
+| `motion_all` | (N,) | float32 | Landmark motion magnitude per frame (full video) |
+| `landmark_0` through `landmark_105` | (T, 2) | float32 | [x, y] coordinates per frame for each of 106 landmarks |
+
+Where T = number of frames in segment.
 
 ### GIF (Visualization)
 
-Animated GIF showing per-frame optical flow with:
-- **Colour wheel**: direction (hue) + magnitude (brightness)
-- **White arrows**: sparse flow vectors
-- **Orange oval**: face mask boundary (black background outside)
-- **Frame counter**: segment frame index
-- **"APEX" label**: marks apex frames
-- **"MASK" label**: indicates mask region
+Animated GIF showing per-frame landmark positions with:
+- **Colored circles**: 106 landmarks (color cycles through 6 distinct hues)
+- **Fading trails**: previous positions with alpha fade (shows motion)
+- **White outline**: bright border around each landmark
+- **Frame counter**: segment frame index (bottom left)
+- **"APEX" label**: marks the apex frame
 
 ## Methodology
 
@@ -162,10 +180,11 @@ See `METHODOLOGY.html` for detailed step-by-step explanation of:
 2. Face detection with Haar cascades
 3. Face standardization (alignment + cropping)
 4. Bbox smoothing & affine registration
-5. Apex detection (motion-based)
-6. Asymmetric segmentation
-7. Dense optical flow (Farneback algorithm)
-8. Visualization & output
+5. 106-point landmark detection (insightface)
+6. Apex detection (landmark motion magnitude)
+7. Asymmetric temporal segmentation
+8. Landmark trajectory tracking
+9. Visualization & output
 
 ## System Requirements
 
@@ -178,30 +197,32 @@ See `METHODOLOGY.html` for detailed step-by-step explanation of:
 
 | Package | Purpose |
 |---------|---------|
-| opencv-python | Face detection, optical flow, image processing |
+| opencv-python | Face detection, image processing, visualization |
 | numpy | Array operations |
 | scipy | Temporal smoothing (median filter) |
 | imageio[ffmpeg] | GIF export |
 | pillow | Image I/O |
+| insightface | 106-point facial landmark detection |
+| onnxruntime | Inference backend for insightface |
 
 ## Troubleshooting
 
 **Issue**: "No face detected in any frame"
-- **Solution**: Check video resolution (min 256×256), lighting, face visibility
+- **Solution**: Check video resolution (min 256×256), lighting, and face visibility
 
-**Issue**: Arrows on shoulders/hair instead of face
-- **Solution**: Reduce `PAD_FACTOR` (try 0.05-0.15)
+**Issue**: Landmarks are scattered or not tracking the face
+- **Solution**: Landmarks may be detected on background; check that `PAD_FACTOR` and `CROP_SIZE` are appropriate for your video resolution
 
 **Issue**: Apex frame seems incorrect
-- **Solution**: Check motion curve: `plt.plot(data["motion_all"])`; apex is `argmax`
+- **Solution**: Check motion curve: `plt.plot(data["motion_all"])`; apex is at `argmax(motion_all)`
 
 **Issue**: GIF file is very large
-- **Solution**: Reduce `GIF_SPEED` or segment size; use compression post-processing
+- **Solution**: Reduce `GIF_SPEED` (try 0.25), `TRAIL_LENGTH`, or `APEX_WINDOW_BEFORE`/`APEX_WINDOW_AFTER`; use compression post-processing
 
 ## Paper References
 
-**Optical Flow:**
-- Farneback, G. (2003). "Two-Frame Motion Estimation Based on Polynomial Expansion"
+**Landmark Detection:**
+- Deng, J., Guo, J., Ververas, E., Kotsia, I., & Zafeiriou, S. (2020). "RetinaFace: Single-stage Dense Face Localisation in the Wild"
 
 **Face Detection:**
 - Viola, P., & Jones, M. (2001). "Rapid Object Detection using a Boosted Cascade of Simple Features"
@@ -213,52 +234,48 @@ See `METHODOLOGY.html` for detailed step-by-step explanation of:
 
 This project is provided for research purposes.
 
-## Landmark Tracking Pipeline
+## Raw Frame Landmark Tracking
 
-**Alternative approach:** Instead of computing dense pixel-level optical flow, track specific anatomical landmarks:
+**Alternative approach:** Track 106 landmarks on raw video frames without preprocessing:
 
-### Landmarks Tracked
-- **Left Eye Center** — left iris center
-- **Right Eye Center** — right iris center  
-- **Left Mouth Corner** — modiolus angoli oris (left)
-- **Right Mouth Corner** — modiolus angoli oris (right)
-
-### Usage
 ```bash
-python scripts/face_of_landmarks_pipeline.py
+python scripts/face_landmarks_raw.py
 ```
 
-### Output
-Saves landmark trajectories as NPZ files with:
-- `left_eye_center` — (T, 2) array of left eye positions
-- `right_eye_center` — (T, 2) array of right eye positions
-- `left_mouth_corner` — (T, 2) array of left mouth corner positions
-- `right_mouth_corner` — (T, 2) array of right mouth corner positions
-- `frames` — standardized face frames (T, 256, 256, 3)
-- `motion_all` — total landmark displacement per frame
+This skips face standardization and produces landmarks in the original video coordinate system (no rotation alignment, no face cropping). Useful for:
+- Tracking landmarks on unaligned faces
+- Analyzing head motion separately
+- Validating preprocessing effects
 
-### Loading Landmark Data
+### Output
+Saves raw landmark detection as NPZ files with:
+- `landmark_0` through `landmark_105` — (T, 2) arrays of [x, y] positions in original video coordinates
+- `bboxes` — (T, 4) face bounding boxes [x, y, w, h]
+- `bboxes_detected` — (T,) boolean array indicating frames where face was detected
+- `fps` — video frame rate
+
+### Example Usage
 ```python
 import numpy as np
 
-data = np.load("output/landmark_tracks_npz/ADFES_F01-Joy-Face Forward.npz")
+data = np.load("output/landmarks_raw_npz/ADFES_F01-Joy-Face Forward.npz")
 
-# Access landmark tracks
-left_eye = data["left_eye_center"]          # shape: (T, 2) — [x, y] per frame
-right_eye = data["right_eye_center"]        # shape: (T, 2)
-left_mouth = data["left_mouth_corner"]      # shape: (T, 2)
-right_mouth = data["right_mouth_corner"]    # shape: (T, 2)
+# Access raw landmarks (no preprocessing)
+landmark_0 = data["landmark_0"]      # shape: (T, 2) — [x, y] in video coords
+landmark_105 = data["landmark_105"]
 
-# Compute displacement from frame 0
-displacement = left_eye - left_eye[0]
-speed = np.linalg.norm(displacement, axis=1)  # speed per frame
+# Face detections
+bboxes = data["bboxes"]              # shape: (T, 4) — [x, y, w, h]
+detected = data["bboxes_detected"]   # shape: (T,) — True if face found
+
+print(f"Frames with detected face: {np.sum(detected)}/{len(detected)}")
 ```
 
 ## Citation
 
 If you use this pipeline, please cite:
 ```
-Quettier, T. (2026). Facial Expression Optical Flow Pipeline. 
+Quettier, T. (2026). Facial Expression Landmark Tracking Pipeline. 
 ORIS Vector Project.
 ```
 

@@ -1,35 +1,34 @@
 """
-Facial Expression Optical Flow Pipeline
-========================================
-Batch processor for multiple video datasets
+Facial Expression Landmark Tracking Pipeline
+=============================================
+Complete pipeline for analyzing facial expressions using landmark tracking.
+
+Instead of dense pixel-level optical flow, this tracks 106 facial landmarks
+from insightface, computing their motion and displacement during expression.
 
 Steps (per video):
   1. Load video frames
   2. Detect face using OpenCV Haar cascade
-  3a. Smooth bounding boxes (temporal stability)
-  3b. Standardise face position (align, crop) + affine registration to frame 0
-  4. Create circular face mask (optional)
-  5. Detect the expression apex frame (max motion from neutral)
-  6. Segment a fixed window around the apex
-  7. Apply dense Farneback optical flow on the segment
-  8. Save flow vectors to NPZ
-  9. Export a GIF with colour-wheel + arrow visualisation
-
-Usage (from project root, with face_of conda env active):
-    python scripts/face_of_pipeline.py
+  3. Smooth bounding boxes (temporal stability)
+  4. Standardise face position (align, crop) + affine registration to frame 0
+  5. Detect 106 landmarks using insightface on standardized frames
+  6. Compute landmark motion magnitude (apex detection)
+  7. Segment a fixed window around the apex
+  8. Save landmark trajectories to NPZ
+  9. Export GIF with landmark motion visualization
 
 Output structure:
     output/
-    ├── optical_flow_npz/
-    │   ├── ADFES_video1_name.npz
-    │   ├── ADFES_video2_name.npz
-    │   └── JeFEE_video1_name.npz
-    └── flow_visualization_gif/
-        ├── ADFES_video1_name.gif
-        ├── ADFES_video2_name.gif
-        └── JeFEE_video1_name.gif
+    ├── landmark_npz/
+    │   ├── ADFES_video_name.npz
+    │   └── JeFEE_video_name.npz
+    └── landmark_gif/
+        ├── ADFES_video_name.gif
+        └── JeFEE_video_name.gif
+
+Usage (from project root, with face_of conda env active):
+    python scripts/face_of_pipeline.py
 """
-#conda activate face_of 
 
 import math
 import sys
@@ -40,35 +39,33 @@ import imageio
 import numpy as np
 from scipy import ndimage
 
+try:
+    from insightface.app import FaceAnalysis
+except ImportError:
+    print("[ERROR] insightface not installed. Install with:")
+    print("  pip install insightface onnxruntime")
+    sys.exit(1)
+
 # ---------------------------------------------------------------------------
-# Configuration — edit these to change behaviour
+# Configuration
 # ---------------------------------------------------------------------------
-VIDEO_ROOT  = "video"        # scan this folder for all videos
-OUTPUT_ROOT = "output"       # organize outputs by file type
+VIDEO_ROOT = "video"
+OUTPUT_ROOT = "output"
 
-CROP_SIZE       = 256        # output face square in pixels
-PAD_FACTOR      = 0.3       # extra padding fraction around face bounding box
-APEX_WINDOW_BEFORE = 40      # frames BEFORE apex to include in segment
-APEX_WINDOW_AFTER  = 5       # frames AFTER apex to include in segment
+CROP_SIZE = 256        # output face square in pixels
+PAD_FACTOR = 0.3       # extra padding fraction around face bounding box
+APEX_WINDOW_BEFORE = 40  # frames BEFORE apex to include in segment
+APEX_WINDOW_AFTER = 5    # frames AFTER apex to include in segment
 
-# Face mask for optical flow (isolate motion to face region only)
-USE_FACE_MASK   = True       # enable/disable face masking for OF
-FACE_MASK_SIZE  = 0.85       # fraction of frame size (0.0-1.0); 0.85 = 85% of 256px
+# Visualization
+LANDMARK_RADIUS = 3
+TRAIL_LENGTH = 10      # show trail for last N frames
+GIF_SPEED = 0.5        # fraction of real speed for GIF (0.5 = half speed)
 
-ARROW_STEP  = 16             # grid spacing for arrow visualisation (px)
-ARROW_SCALE = 10.0            # multiplier to make arrows visible
-GIF_SPEED   = 0.5            # fraction of real speed for GIF (0.5 = half speed)
+# Landmarks: insightface provides 106 points
+N_LANDMARKS = 106
 
-
-# Farneback parameters
-OF_PYR_SCALE  = 0.5
-OF_LEVELS     = 3
-OF_WINSIZE    = 15
-OF_ITERATIONS = 3
-OF_POLY_N     = 5
-OF_POLY_SIGMA = 1.2
-
-# Video file extensions to search for
+# Video file extensions
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 
 
@@ -77,11 +74,7 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 # ---------------------------------------------------------------------------
 
 def find_all_videos(root_dir: Path) -> list[tuple[Path, str, str]]:
-    """
-    Recursively find all video files.
-    Returns list of (video_path, dataset_name, video_stem).
-    dataset_name is the immediate parent folder (e.g., 'ADFES', 'JeFEE').
-    """
+    """Recursively find all video files."""
     videos = []
     for video_path in root_dir.rglob("*"):
         if video_path.suffix.lower() in VIDEO_EXTENSIONS and video_path.is_file():
@@ -110,24 +103,17 @@ def load_video(path: Path) -> tuple[list[np.ndarray], float]:
 
 
 def detect_face_bbox(frame_bgr: np.ndarray, cascade) -> tuple[int, int, int, int] | None:
-    """
-    Detect face using Haar cascade.
-    Returns (x, y, w, h) or None if no face found.
-    """
+    """Detect face using Haar cascade. Returns (x, y, w, h) or None."""
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
     faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
                                      minSize=(50, 50))
     if len(faces) == 0:
         return None
-    # return largest face
     return tuple(faces[np.argmax(faces[:, 2] * faces[:, 3])])
 
 
 def estimate_eye_points(x: int, y: int, w: int, h: int) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Estimate left and right eye centers from face bounding box.
-    Simple geometry: eyes are ~1/3 down the face, at 1/3 and 2/3 horizontal positions.
-    """
+    """Estimate left and right eye centers from face bounding box."""
     eye_y = y + int(0.35 * h)
     left_eye  = np.array([x + int(0.25 * w), eye_y], dtype=np.float32)
     right_eye = np.array([x + int(0.75 * w), eye_y], dtype=np.float32)
@@ -135,10 +121,7 @@ def estimate_eye_points(x: int, y: int, w: int, h: int) -> tuple[np.ndarray, np.
 
 
 def get_face_keypoints(x: int, y: int, w: int, h: int) -> np.ndarray:
-    """
-    Estimate 3 key facial points from bounding box: left eye, right eye, nose.
-    Returns (3, 2) array of (x, y) coordinates.
-    """
+    """Estimate 3 key facial points from bounding box: left eye, right eye, nose."""
     left_eye  = np.array([x + int(0.25 * w), y + int(0.35 * h)], dtype=np.float32)
     right_eye = np.array([x + int(0.75 * w), y + int(0.35 * h)], dtype=np.float32)
     nose      = np.array([x + int(0.50 * w), y + int(0.55 * h)], dtype=np.float32)
@@ -147,18 +130,11 @@ def get_face_keypoints(x: int, y: int, w: int, h: int) -> np.ndarray:
 
 def align_and_crop(frame_bgr: np.ndarray, bbox: tuple[int, int, int, int],
                    crop_size: int, pad_factor: float) -> np.ndarray:
-    """
-    1. Rotate frame so eyes are horizontal.
-    2. Crop a padded square around the face.
-    3. Resize to crop_size × crop_size.
-    """
+    """Rotate frame so eyes are horizontal, then crop to square."""
     h, w = frame_bgr.shape[:2]
     x, y, bw, bh = bbox
 
-    # estimate eye positions
     le, re = estimate_eye_points(x, y, bw, bh)
-
-    # --- rotation ---
     dx, dy = re - le
     angle = math.degrees(math.atan2(dy, dx))
     cx, cy = w / 2, h / 2
@@ -167,18 +143,15 @@ def align_and_crop(frame_bgr: np.ndarray, bbox: tuple[int, int, int, int],
                              flags=cv2.INTER_LINEAR,
                              borderMode=cv2.BORDER_REFLECT_101)
 
-    # rotate bbox center
     bbox_center = np.array([x + bw/2, y + bh/2, 1.0], dtype=np.float32)
     bbox_center_rot = M_rot @ bbox_center
 
-    # --- padded square bounding box ---
     pad = pad_factor * max(bw, bh)
     x_min = bbox_center_rot[0] - bw/2 - pad
     y_min = bbox_center_rot[1] - bh/2 - pad
     x_max = x_min + bw + 2*pad
     y_max = y_min + bh + 2*pad
 
-    # force square
     side = max(x_max - x_min, y_max - y_min)
     cx_box = (x_min + x_max) / 2
     cy_box = (y_min + y_max) / 2
@@ -197,7 +170,7 @@ def smooth_bboxes(bboxes: list[tuple], kernel_size: int = 5) -> list[tuple]:
     """Apply median filter to smooth bounding boxes across frames."""
     bboxes_array = np.array(bboxes, dtype=np.float32)
     smoothed = np.zeros_like(bboxes_array)
-    for i in range(4):  # smooth x, y, w, h
+    for i in range(4):
         smoothed[:, i] = ndimage.median_filter(bboxes_array[:, i], size=kernel_size)
     return [tuple(int(v) for v in b) for b in smoothed]
 
@@ -205,33 +178,23 @@ def smooth_bboxes(bboxes: list[tuple], kernel_size: int = 5) -> list[tuple]:
 def register_to_reference(frame_bgr: np.ndarray, bbox: tuple[int, int, int, int],
                           ref_keypoints: np.ndarray, ref_bbox: tuple[int, int, int, int],
                           crop_size: int, pad_factor: float) -> np.ndarray:
-    """
-    Register frame to reference by computing affine transform from current keypoints
-    to reference keypoints. This removes rigid head motion.
-    """
+    """Register frame to reference by computing affine transform."""
     x, y, bw, bh = bbox
     curr_keypoints = get_face_keypoints(x, y, bw, bh)
-
-    # Compute affine transformation to align current to reference
     M = cv2.getAffineTransform(curr_keypoints, ref_keypoints)
 
-    # Apply affine warp
     h, w = frame_bgr.shape[:2]
     warped = cv2.warpAffine(frame_bgr, M, (w, h),
                             flags=cv2.INTER_LINEAR,
                             borderMode=cv2.BORDER_REFLECT_101)
 
-    # Crop around the reference frame's fixed position
     ref_x, ref_y, ref_w, ref_h = ref_bbox
-
-    # --- crop around reference position ---
     pad = pad_factor * max(ref_w, ref_h)
     x_min = int(ref_x + ref_w/2 - ref_w/2 - pad)
     y_min = int(ref_y + ref_h/2 - ref_h/2 - pad)
     x_max = int(x_min + ref_w + 2*pad)
     y_max = int(y_min + ref_h + 2*pad)
 
-    # force square
     side = max(x_max - x_min, y_max - y_min)
     cx_box = (x_min + x_max) / 2
     cy_box = (y_min + y_max) / 2
@@ -246,114 +209,76 @@ def register_to_reference(frame_bgr: np.ndarray, bbox: tuple[int, int, int, int]
     return cv2.resize(crop, (crop_size, crop_size))
 
 
-def create_face_mask(h: int, w: int, mask_size: float) -> np.ndarray:
+def detect_landmarks_on_frame(frame_bgr: np.ndarray, face_analyzer) -> np.ndarray | None:
     """
-    Create an elliptical (oval) face mask that frames the face.
-    h, w: frame dimensions
-    mask_size: fraction of frame to mask (0.0-1.0)
-    Returns binary mask (0=outside, 255=inside).
+    Detect 106 landmarks using insightface.
+    Returns (106, 2) array of landmark coordinates or None if no face.
     """
-    mask = np.zeros((h, w), dtype=np.uint8)
-    center = (w // 2, h // 2)
-    # Ellipse: taller than wide to match face proportions
-    axes_x = int((w / 2) * mask_size * 0.9)      # narrower (90% of horizontal)
-    axes_y = int((h / 2) * mask_size)             # taller (100% of vertical, to frame face)
-    cv2.ellipse(mask, center, (axes_x, axes_y), 0, 0, 360, 255, -1)  # filled ellipse
-    return mask
+    faces = face_analyzer.get(frame_bgr)
+    if not faces:
+        return None
+
+    # Use first (largest) face
+    kps = faces[0].kps  # Shape: (106, 2)
+    return np.array(kps, dtype=np.float32)
 
 
-def apply_mask_to_gray(gray: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Apply mask to grayscale frame (sets masked-out regions to 0)."""
-    return cv2.bitwise_and(gray, gray, mask=mask)
-
-
-def motion_from_neutral(frames_standardised: list[np.ndarray], mask: np.ndarray | None = None) -> np.ndarray:
+def compute_landmark_motion(landmarks_sequence: list[np.ndarray | None]) -> np.ndarray:
     """
-    For each frame, compute total optical flow magnitude from the first (neutral) frame.
-    This is used to detect the apex (peak displacement from neutral).
-    If mask is provided, only compute flow within the mask region.
-    Returns 1-D array of length n_frames.
+    Compute total landmark motion magnitude for each frame.
+    Returns array of shape (n_frames,) with total displacement from frame 0.
     """
-    motion = [0.0]  # first frame has 0 motion
-    neutral_gray = cv2.cvtColor(frames_standardised[0], cv2.COLOR_BGR2GRAY)
-    if mask is not None:
-        neutral_gray = apply_mask_to_gray(neutral_gray, mask)
+    motion = np.zeros(len(landmarks_sequence), dtype=np.float32)
 
-    for i in range(1, len(frames_standardised)):
-        curr_gray = cv2.cvtColor(frames_standardised[i], cv2.COLOR_BGR2GRAY)
-        if mask is not None:
-            curr_gray = apply_mask_to_gray(curr_gray, mask)
+    # Find first valid landmarks as reference
+    ref_landmarks = None
+    for lm in landmarks_sequence:
+        if lm is not None:
+            ref_landmarks = lm
+            break
 
-        flow = cv2.calcOpticalFlowFarneback(
-            neutral_gray, curr_gray, None,
-            OF_PYR_SCALE, OF_LEVELS, OF_WINSIZE,
-            OF_ITERATIONS, OF_POLY_N, OF_POLY_SIGMA, 0,
-        )
-        mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2).sum()
-        motion.append(mag)
+    if ref_landmarks is None:
+        return motion
 
-    return np.array(motion, dtype=np.float32)
+    for i in range(len(landmarks_sequence)):
+        if landmarks_sequence[i] is None:
+            motion[i] = motion[i - 1] if i > 0 else 0
+            continue
 
+        # Sum displacement of all landmarks
+        displacements = landmarks_sequence[i] - ref_landmarks
+        total_motion = np.sum(np.linalg.norm(displacements, axis=1))
+        motion[i] = total_motion
 
-def flow_to_color(flow: np.ndarray, max_mag: float) -> np.ndarray:
-    """
-    Convert (H, W, 2) flow to a BGR colour image using HSV colour wheel.
-    Direction → hue, magnitude → value, saturation=1.
-    """
-    dx, dy = flow[..., 0], flow[..., 1]
-    mag = np.sqrt(dx**2 + dy**2)
-    angle = np.arctan2(dy, dx)  # -pi .. pi
-
-    hue = ((angle + math.pi) / (2 * math.pi) * 179).astype(np.uint8)
-    if max_mag > 0:
-        val = np.clip(mag / max_mag * 255, 0, 255).astype(np.uint8)
-    else:
-        val = np.zeros_like(hue)
-    sat = np.full_like(hue, 255)
-
-    hsv = np.stack([hue, sat, val], axis=-1)
-    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    return motion
 
 
-def draw_arrows(canvas: np.ndarray, flow: np.ndarray,
-                step: int, scale: float) -> np.ndarray:
-    """
-    Draw a regular grid of flow arrows on canvas.
-    Skips arrows with very small magnitude.
-    """
-    out = canvas.copy()
-    h, w = canvas.shape[:2]
-    for y in range(step // 2, h, step):
-        for x in range(step // 2, w, step):
-            dx = flow[y, x, 0] * scale
-            dy = flow[y, x, 1] * scale
-            mag = math.sqrt(dx**2 + dy**2)
-            if mag < 0.3:  # skip very small vectors
-                continue
-            x2 = int(x + dx)
-            y2 = int(y + dy)
-            cv2.arrowedLine(out, (x, y), (x2, y2),
-                            color=(255, 255, 255), thickness=1,
-                            tipLength=0.3)
-    return out
+def get_landmark_color(idx: int) -> tuple:
+    """Generate distinct colors for landmarks (BGR)."""
+    colors = [
+        (255, 0, 0),      # Blue
+        (0, 255, 0),      # Green
+        (0, 0, 255),      # Red
+        (255, 255, 0),    # Cyan
+        (255, 0, 255),    # Magenta
+        (0, 255, 255),    # Yellow
+    ]
+    return colors[idx % len(colors)]
 
 
 def process_video(video_path: Path, dataset_name: str, video_stem: str,
-                  output_root: Path, cascade) -> bool:
-    """
-    Process a single video. Returns True if successful.
-    """
+                  output_root: Path, cascade, face_analyzer) -> bool:
+    """Process a single video: detect, standardize, track landmarks."""
     print(f"\n{'='*70}")
     print(f"Processing: {dataset_name}/{video_stem}")
     print(f"{'='*70}")
 
-    # Output folders organized by file type
-    npz_dir = output_root / "optical_flow_npz"
-    gif_dir = output_root / "flow_visualization_gif"
+    # Output folders
+    npz_dir = output_root / "landmark_npz"
+    gif_dir = output_root / "landmark_gif"
     npz_dir.mkdir(parents=True, exist_ok=True)
     gif_dir.mkdir(parents=True, exist_ok=True)
 
-    # File names with dataset prefix
     file_prefix = f"{dataset_name}_{video_stem}"
     npz_path = npz_dir / f"{file_prefix}.npz"
     gif_path = gif_dir / f"{file_prefix}.gif"
@@ -361,11 +286,11 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
     # ── 1. Load video ────────────────────────────────────────────────────────
     frames_raw, fps = load_video(video_path)
     if not frames_raw:
-        print(f"[ERROR] Failed to load video: {video_path}")
+        print(f"[ERROR] Failed to load video")
         return False
     n_frames = len(frames_raw)
 
-    # ── 2. Face detection (all frames) ───────────────────────────────────────
+    # ── 2. Face detection ────────────────────────────────────────────────────
     print("[INFO] Detecting face bounding boxes …")
     bboxes = []
     for i, f in enumerate(frames_raw):
@@ -377,10 +302,10 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
     detected = sum(1 for bbox in bboxes if bbox is not None)
     print(f"[INFO] Face detected in {detected}/{n_frames} frames")
     if detected == 0:
-        print(f"[ERROR] No face detected in any frame, skipping.")
+        print(f"[ERROR] No face detected, skipping")
         return False
 
-    # fill None entries with nearest valid bbox
+    # Fill None entries with nearest valid bbox
     prev_bbox = next((bbox for bbox in bboxes if bbox is not None), None)
     filled_bbox = []
     for bbox in bboxes:
@@ -388,132 +313,114 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
             prev_bbox = bbox
         filled_bbox.append(prev_bbox)
 
-    # ── 3a. Smooth bounding boxes (reduce jitter) ────────────────────────────
-    print("[INFO] Smoothing bounding boxes (temporal stability) …")
+    # ── 3a. Smooth bounding boxes ────────────────────────────────────────────
+    print("[INFO] Smoothing bounding boxes …")
     filled_bbox = smooth_bboxes(filled_bbox, kernel_size=5)
 
     # ── 3b. Face standardisation with affine registration ──────────────────────
     print("[INFO] Standardising face position + affine registration …")
-    # First frame as reference
     ref_bbox = filled_bbox[0]
     ref_keypoints = get_face_keypoints(*ref_bbox)
 
-    # Align first frame without registration (it's the reference)
     std_frames = [align_and_crop(frames_raw[0], filled_bbox[0], CROP_SIZE, PAD_FACTOR)]
 
-    # Register all other frames to the reference
     for i in range(1, n_frames):
         frame_registered = register_to_reference(
             frames_raw[i], filled_bbox[i], ref_keypoints, ref_bbox, CROP_SIZE, PAD_FACTOR
         )
         std_frames.append(frame_registered)
 
-    # ── 4. Create face mask (optional) ───────────────────────────────────────
-    face_mask = None
-    if USE_FACE_MASK:
-        print("[INFO] Creating face mask for OF computation …")
-        face_mask = create_face_mask(CROP_SIZE, CROP_SIZE, FACE_MASK_SIZE)
+    # ── 4. Detect landmarks on standardized frames ───────────────────────────
+    print("[INFO] Detecting 106 landmarks on standardized frames …")
+    landmarks_sequence = []
+    for i, frame in enumerate(std_frames):
+        lm = detect_landmarks_on_frame(frame, face_analyzer)
+        landmarks_sequence.append(lm)
+        if (i + 1) % 20 == 0:
+            print(f"  … {i+1}/{n_frames}")
 
-    # ── 5. Apex detection (max motion) ───────────────────────────────────────
-    print("[INFO] Computing motion for apex detection …")
-    motion = motion_from_neutral(std_frames, face_mask)
+    detected_lm = sum(1 for lm in landmarks_sequence if lm is not None)
+    print(f"[INFO] Landmarks detected in {detected_lm}/{n_frames} frames")
+
+    # ── 5. Compute landmark motion ───────────────────────────────────────────
+    print("[INFO] Computing landmark motion …")
+    motion = compute_landmark_motion(landmarks_sequence)
     apex_global = int(np.argmax(motion))
     print(f"[INFO] Apex frame: {apex_global} (motion={motion[apex_global]:.1f})")
 
-    # ── 6. Segmentation around apex (asymmetric window) ──────────────────────
+    # ── 6. Segmentation around apex ──────────────────────────────────────────
     seg_start = max(0, apex_global - APEX_WINDOW_BEFORE)
     seg_end   = min(n_frames, apex_global + APEX_WINDOW_AFTER + 1)
     apex_local = apex_global - seg_start
     seg_frames = std_frames[seg_start:seg_end]
+    seg_landmarks = landmarks_sequence[seg_start:seg_end]
     T = len(seg_frames)
-    print(f"[INFO] Segment: frames {seg_start}–{seg_end-1} ({T} frames), "
-          f"apex at local index {apex_local} "
-          f"({APEX_WINDOW_BEFORE} before + {APEX_WINDOW_AFTER} after)")
+    print(f"[INFO] Segment: frames {seg_start}–{seg_end-1} ({T} frames), apex at index {apex_local}")
 
-    # ── 7. Dense Optical Flow (Farneback) ────────────────────────────────────
-    print("[INFO] Computing dense optical flow …")
-    flows = []
-    for i in range(T - 1):
-        prev_gray = cv2.cvtColor(seg_frames[i],     cv2.COLOR_BGR2GRAY)
-        curr_gray = cv2.cvtColor(seg_frames[i + 1], cv2.COLOR_BGR2GRAY)
+    # ── 7. Save NPZ ──────────────────────────────────────────────────────────
+    print("[INFO] Saving landmark trajectories …")
+    landmarks_array = {}
+    for i in range(N_LANDMARKS):
+        lm_track = []
+        for lm_dict in seg_landmarks:
+            if lm_dict is not None and i < len(lm_dict):
+                lm_track.append(lm_dict[i])
+            else:
+                lm_track.append(np.array([0, 0], dtype=np.float32))
+        landmarks_array[f"landmark_{i}"] = np.stack(lm_track)  # (T, 2)
 
-        # Apply face mask if enabled
-        if face_mask is not None:
-            prev_gray = apply_mask_to_gray(prev_gray, face_mask)
-            curr_gray = apply_mask_to_gray(curr_gray, face_mask)
-
-        flow = cv2.calcOpticalFlowFarneback(
-            prev_gray, curr_gray, None,
-            OF_PYR_SCALE, OF_LEVELS, OF_WINSIZE,
-            OF_ITERATIONS, OF_POLY_N, OF_POLY_SIGMA, 0,
-        )
-        flows.append(flow)
-    print(f"[INFO] Computed {len(flows)} flow maps, each {flows[0].shape}")
-
-    # ── 8. Save NPZ ──────────────────────────────────────────────────────────
     np.savez_compressed(
         str(npz_path),
-        flow              = np.stack(flows),                    # (T-1, H, W, 2)
         frames            = np.stack(seg_frames),              # (T, H, W, 3)
         apex_local        = np.int32(apex_local),
         apex_global       = np.int32(apex_global),
         seg_start         = np.int32(seg_start),
         seg_end           = np.int32(seg_end),
         fps               = np.float32(fps),
-        motion_all        = motion,                            # (n_frames,)
-        face_mask_used    = USE_FACE_MASK,
-        face_mask_size    = FACE_MASK_SIZE,
+        motion_all        = motion,
+        **landmarks_array
     )
     print(f"[INFO] Saved → {npz_path}")
 
-    # ── 9. GIF visualisation ─────────────────────────────────────────────────
-    print("[INFO] Rendering GIF …")
-    flow_stack = np.stack(flows)
-    max_mag = float(np.sqrt(flow_stack[..., 0]**2 +
-                            flow_stack[..., 1]**2).max())
-    max_mag = max(max_mag, 1e-6)
+    # ── 8. GIF visualisation ─────────────────────────────────────────────────
+    print("[INFO] Rendering GIF with landmark tracks …")
 
     gif_frames = []
-    for i, flow in enumerate(flows):
-        base = seg_frames[i].copy()
+    for i, frame in enumerate(seg_frames):
+        canvas = frame.copy()
 
-        # colour-wheel overlay
-        color_map = flow_to_color(flow, max_mag)
-        blended = cv2.addWeighted(base, 0.5, color_map, 0.5, 0)
+        # Draw landmarks and trails
+        if seg_landmarks[i] is not None:
+            landmarks = seg_landmarks[i]
+            for lm_idx, lm in enumerate(landmarks):
+                color = get_landmark_color(lm_idx)
 
-        # arrow overlay
-        blended = draw_arrows(blended, flow, ARROW_STEP, ARROW_SCALE)
+                # Draw trail (previous positions)
+                trail_start = max(0, i - TRAIL_LENGTH)
+                for j in range(trail_start, i):
+                    if seg_landmarks[j] is not None and lm_idx < len(seg_landmarks[j]):
+                        prev_lm = seg_landmarks[j][lm_idx].astype(int)
+                        alpha = (j - trail_start + 1) / (i - trail_start + 1)
+                        fade_color = tuple(int(c * alpha) for c in color)
+                        cv2.circle(canvas, tuple(prev_lm), LANDMARK_RADIUS // 2, fade_color, 1)
 
-        # apply mask: black out background (if enabled)
-        if face_mask is not None:
-            center = (CROP_SIZE // 2, CROP_SIZE // 2)
-            axes_x = int((CROP_SIZE / 2) * FACE_MASK_SIZE * 0.9)
-            axes_y = int((CROP_SIZE / 2) * FACE_MASK_SIZE)
+                # Draw current landmark
+                pos = lm.astype(int)
+                cv2.circle(canvas, tuple(pos), LANDMARK_RADIUS, color, -1)
+                cv2.circle(canvas, tuple(pos), LANDMARK_RADIUS, (255, 255, 255), 1)
 
-            # Create inverse mask to black out background
-            mask_inv = cv2.bitwise_not(face_mask)
-            # Apply black overlay to background
-            black = np.zeros_like(blended)
-            blended = cv2.copyTo(blended, face_mask) + cv2.copyTo(black, mask_inv)
-
-            # Draw oval boundary (orange)
-            cv2.ellipse(blended, center, (axes_x, axes_y), 0, 0, 360, (100, 200, 255), 2)
-            cv2.putText(blended, "MASK", (center[0] - 20, center[1] - axes_y + 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 200, 255), 1)
-
-        # mark apex frame
-        local_frame_idx = i
-        if local_frame_idx == apex_local or local_frame_idx == apex_local - 1:
-            cv2.putText(blended, "APEX", (4, 20),
+        # Mark apex
+        if i == apex_local or i == apex_local - 1:
+            cv2.putText(canvas, "APEX", (4, 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
 
-        # frame counter
-        cv2.putText(blended, f"{seg_start + i}", (4, CROP_SIZE - 6),
+        # Frame counter
+        cv2.putText(canvas, f"{seg_start + i}", (4, CROP_SIZE - 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
 
-        gif_frames.append(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB))
+        gif_frames.append(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
 
-    gif_fps  = max(1.0, fps * GIF_SPEED)
+    gif_fps = max(1.0, fps * GIF_SPEED)
     imageio.mimsave(str(gif_path), gif_frames, fps=gif_fps, loop=0)
     print(f"[INFO] Saved → {gif_path}")
 
@@ -535,6 +442,11 @@ def main():
     if cascade.empty():
         sys.exit("[ERROR] Could not load Haar cascade.")
 
+    # Initialize insightface
+    print("[INFO] Initializing insightface (106-point landmark detector) …")
+    face_analyzer = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+    face_analyzer.prepare(ctx_id=0, det_size=(640, 640))
+
     # Find all videos
     videos = find_all_videos(video_root)
     if not videos:
@@ -552,7 +464,7 @@ def main():
     for video_path, dataset_name, video_stem in videos:
         try:
             success = process_video(video_path, dataset_name, video_stem,
-                                    output_root, cascade)
+                                    output_root, cascade, face_analyzer)
             if success:
                 succeeded += 1
             else:
@@ -560,6 +472,8 @@ def main():
         except Exception as e:
             print(f"[ERROR] Exception processing {dataset_name}/{video_stem}:")
             print(f"  {e}")
+            import traceback
+            traceback.print_exc()
             failed += 1
 
     # Summary
@@ -570,8 +484,8 @@ def main():
     print(f"Successful      : {succeeded}")
     print(f"Failed          : {failed}")
     print(f"\nOutput structure:")
-    print(f"  NPZ files       : {output_root / 'optical_flow_npz'}")
-    print(f"  GIF files       : {output_root / 'flow_visualization_gif'}")
+    print(f"  NPZ files       : {output_root / 'landmark_npz'}")
+    print(f"  GIF files       : {output_root / 'landmark_gif'}")
     print(f"  Naming          : <dataset>_<video_stem>.<ext>")
     print(f"{'='*70}\n")
 
