@@ -394,6 +394,43 @@ def create_apex_visualization_key(frame: np.ndarray, landmarks_0: dict, landmark
     print(f"[INFO] Saved key landmarks apex visualization → {output_path}")
 
 
+def create_landmark_debug_image(frame: np.ndarray, landmarks_dict: dict, output_path: Path) -> None:
+    """
+    Create debug image showing all 106 landmarks with their indices.
+    Helps identify correct landmark positions for key landmarks.
+    """
+    canvas = frame.copy()
+    h, w = canvas.shape[:2]
+
+    # Draw all landmarks with their indices
+    for name, lm in landmarks_dict.items():
+        if lm is None:
+            continue
+
+        idx = int(name.split('_')[1])
+        pos = tuple(lm.astype(int))
+
+        # Clamp to bounds
+        pos = (max(0, min(w - 1, pos[0])), max(0, min(h - 1, pos[1])))
+
+        # Draw circle
+        color = get_landmark_color(idx)
+        cv2.circle(canvas, pos, 3, color, -1)
+        cv2.circle(canvas, pos, 3, (255, 255, 255), 1)
+
+        # Draw index label (small text)
+        cv2.putText(canvas, str(idx), (pos[0] + 5, pos[1] - 5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+
+    # Save debug image
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_path), canvas)
+    print(f"[INFO] Saved landmark debug image → {output_path}")
+    print(f"[INFO] Use this to identify correct landmark indices:")
+    print(f"[INFO]   - Mouth corners (anguli oris): left & right")
+    print(f"[INFO]   - Eyebrow inner points: left & right (middle face over eyebrows)")
+
+
 def create_apex_visualization(frame: np.ndarray, landmarks_0: dict, landmarks_apex: dict,
                               apex_idx: int, output_path: Path) -> None:
     """
@@ -836,6 +873,13 @@ def process_video(video_path: Path, dataset_name: str, video_stem: str,
     arc_dir.mkdir(parents=True, exist_ok=True)
     arc_path = arc_dir / f"{dataset_name}_{video_stem}_arc.png"
     create_expression_arc_plot(motion, apex_idx, arc_path)
+
+    # Create debug image (shows all landmark indices at apex frame)
+    if stabilized_landmarks_sequence[apex_idx] is not None:
+        apex_dir = output_root / "landmarks_raw_apex"
+        apex_dir.mkdir(parents=True, exist_ok=True)
+        debug_path = apex_dir / f"{dataset_name}_{video_stem}_debug.png"
+        create_landmark_debug_image(frames[apex_idx], stabilized_landmarks_sequence[apex_idx], debug_path)
 
     # Create apex visualization with arrows (baseline → apex, stabilized)
     apex_path = None
